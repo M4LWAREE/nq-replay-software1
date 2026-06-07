@@ -866,7 +866,13 @@ function baDraw() {
     if (y0 != null && y1 != null) ppt = Math.abs(y0 - y1);
   }
   const avail = cellW / 2 - tw / 2 - 3;                  // px outside the body, each side
-  const perLevel = cellW >= 18 && ppt >= 8 && avail >= 8; // enough room for a price ladder
+  // Per-level is the DEFAULT (Parag: "show each level, not the sum"). Gate only on
+  // what makes a price ladder physically legible: vertical room per 0.25-tick row
+  // (ppt) and non-microscopic candles (cellW). This is a much lighter gate than the
+  // Footprint study's cellW>=30 grid — per-level numbers appear at normal zoom. Only
+  // when there's genuinely no vertical room (very zoomed out) do we fall back to the
+  // per-candle bid/ask totals. Off-screen rows are culled in the loop (y==null).
+  const perLevel = ppt >= 6 && cellW >= 14;
   for (const b of baBars) {
     const x = ts.timeToCoordinate(b.time);
     if (x == null) continue;
