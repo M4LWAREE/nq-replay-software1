@@ -61,6 +61,12 @@ DEFAULT_SLIP_TK = 1        # adverse slip ticks on market / stop fills
 # Neutral synthetic date so the x-axis shows real ET time-of-day but NO real date.
 SYNTH_BASE = 1577836800    # 2020-01-01 00:00:00 UTC (epoch seconds)
 
+CSV_HEADER = ["order_id", "side", "size", "entry_et", "exit_et",
+              "entry_px_disp", "exit_px_disp", "exit_reason",
+              "pnl_ticks", "pnl_net", "mfe_ticks", "mae_ticks",
+              "hold_s", "stop_tk", "target_tk", "trail_tk", "arm_tk",
+              "coinflip_ev_net", "random_time_ev_net", "instrument"]
+
 # ── load tick cache (memmap — read only) ─────────────────────────────────────
 print("[replay_trader] loading tick cache (mmap)...")
 TS = np.load(CACHE / "nq_ticks_ts.npy", mmap_mode="r")    # int64 ns UTC
@@ -947,14 +953,12 @@ class ReplaySession:
 
     def _write_csv_header(self):
         with open(self._csv_path, "w", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["order_id", "side", "size", "entry_et", "exit_et",
-                        "entry_px_disp", "exit_px_disp", "exit_reason",
-                        "pnl_ticks", "pnl_net", "mfe_ticks", "mae_ticks",
-                        "hold_s", "stop_tk", "target_tk", "trail_tk", "arm_tk",
-                        "coinflip_ev_net", "random_time_ev_net", "instrument"])
+            csv.writer(f).writerow(CSV_HEADER)
 
     def _append_trade_csv(self, t):
+        # Self-heal: re-emit header if the CSV is missing/empty.
+        if (not self._csv_path.exists()) or self._csv_path.stat().st_size == 0:
+            self._write_csv_header()
         with open(self._csv_path, "a", newline="") as f:
             w = csv.writer(f)
             w.writerow([t["order_id"], t["side"], t["size"], t["entry_et"], t["exit_et"],
