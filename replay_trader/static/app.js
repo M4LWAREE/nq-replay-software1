@@ -33,6 +33,13 @@ const candle = chart.addCandlestickSeries({
 const vol = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "" });
 vol.priceScale().applyOptions({ scaleMargins: { top: 0.86, bottom: 0 } });
 
+// session VWAP line (Σpx·sz / Σsz from the 09:30 RTH open; server-computed,
+// no-lookahead). Empty data when the study is off (hidden). Default off.
+const vwapSeries = chart.addLineSeries({
+  color: "#e3d14b", lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
+  crosshairMarkerVisible: false, lineStyle: LightweightCharts.LineStyle.Solid,
+});
+
 // price line markers for live position (stop / target / entry)
 let posPriceLines = [];
 function clearPosLines() { posPriceLines.forEach((l) => candle.removePriceLine(l)); posPriceLines = []; }
@@ -164,6 +171,7 @@ function renderState(s) {
   }
   renderFlow(s);
   renderHeat(s);
+  renderVwap(s);
   renderTrades(s);
 }
 
@@ -186,7 +194,7 @@ async function poll() {
     // Subtracting tfSec would return an OLDER bucket and make candle.update() throw
     // "Cannot update oldest data", silently killing the live refresh.
     const since = lastBarTime === null ? "" : lastBarTime;
-    const r = await api(`/api/bars?tf=${TF}&since=${since}${flowOn ? "&flow=1" : ""}${heatOn ? "&heat=1" : ""}`);
+    const r = await api(`/api/bars?tf=${TF}&since=${since}${flowOn ? "&flow=1" : ""}${heatOn ? "&heat=1" : ""}${vwapOn ? "&vwap=1" : ""}`);
     if (r.ok) {
       applyBars(r.bars || [], lastBarTime === null);
       renderState(r);
@@ -209,6 +217,7 @@ async function fetchTradesTable() {
 // ── full reload (new session / tf switch) ─────────────────────────────────────
 async function fullReload() {
   lastBarTime = null;
+  vwapClear();                 // VWAP line rebuilds live after a TF switch / new session
   const r = await api(`/api/bars?tf=${TF}&since=`);
   if (r.ok) {
     applyBars(r.bars || [], true);
@@ -768,6 +777,41 @@ $("#btnHeat").onclick = () => setHeat(!heatOn);
 // default ON: only off when the user explicitly persisted "0"
 try { setHeat(localStorage.getItem(HEAT_KEY) !== "0"); } catch (_) { setHeat(true); }
 
+// ── VWAP ───────────────────────────────────────────────────────────────────────
+// Session VWAP line from the 09:30 RTH open (server-computed in the snapshot, gated
+// by &vwap=1; incremental running sums, no-lookahead). Built LIVE: each poll appends
+// the current VWAP at the current bar time. Default OFF, persisted, hidden when off
+// (empty series, server calc skipped). Switching TF / new session resets the line
+// (vwapClear in fullReload); it rebuilds live from the current point since the
+// snapshot carries only the current value.
+const VWAP_KEY = "replay_trader.vwap";
+let vwapOn = false;
+let vwapLastT = null;          // last applied point time (keep the series monotonic)
+
+function renderVwap(s) {
+  if (!vwapOn) return;
+  const v = s ? s.vwap : undefined;
+  if (v === null || v === undefined || lastBarTime === null) return;
+  if (vwapLastT !== null && lastBarTime < vwapLastT) return;   // never go back in time
+  vwapSeries.update({ time: lastBarTime, value: v });
+  vwapLastT = lastBarTime;
+}
+
+function vwapClear() {
+  vwapSeries.setData([]);
+  vwapLastT = null;
+}
+
+function setVwap(on) {
+  vwapOn = on;
+  $("#btnVWAP").classList.toggle("active", on);
+  try { localStorage.setItem(VWAP_KEY, on ? "1" : "0"); } catch (_) {}
+  if (!on) vwapClear();        // hide the line; poll drops &vwap=1 -> server skips calc
+}
+$("#btnVWAP").onclick = () => setVwap(!vwapOn);
+// default OFF: only on when the user explicitly persisted "1"
+try { setVwap(localStorage.getItem(VWAP_KEY) === "1"); } catch (_) { setVwap(false); }
+
 // ── contract selector: Mini (NQ) ↔ Micro (MNQ) ─────────────────────────────
 // Pure math switch — micro = 1/10 the $/tick & commission of a mini (10 micros
 // = 1 mini). Lets you hold wider/longer for the same dollar risk. No new data.
@@ -830,14 +874,12 @@ async function baFetch() {
     ]);
     const fp = {};
     if (rf && rf.ok) for (const b of (rf.fp || [])) {
-      let bid = 0, ask = 0;
-      for (const c of (b.cells || [])) { bid += c.s; ask += c.b; }
-      fp[b.time] = { cells: b.cells || [], poc: b.poc, bid, ask };
+      fp[b.time] = { cells: b.cells || [], poc: b.poc };   // per-level cells only (no sums)
     }
     if (rb && rb.ok) {
       baBars = (rb.bars || [])
         .filter((b) => b.time >= from - 1 && b.time <= to + 1)
-        .map((b) => Object.assign({}, b, fp[b.time] || { cells: [], poc: null, bid: 0, ask: 0 }));
+        .map((b) => Object.assign({}, b, fp[b.time] || { cells: [], poc: null }));
       baDraw();
     }
   } catch (e) { /* transient */ }
@@ -866,14 +908,26 @@ function baDraw() {
     if (y0 != null && y1 != null) ppt = Math.abs(y0 - y1);
   }
   const avail = cellW / 2 - tw / 2 - 3;                  // px outside the body, each side
-  // Per-level is the DEFAULT (Parag: "show each level, not the sum"). Gate only on
-  // what makes a price ladder physically legible: vertical room per 0.25-tick row
-  // (ppt) and non-microscopic candles (cellW). This is a much lighter gate than the
-  // Footprint study's cellW>=30 grid — per-level numbers appear at normal zoom. Only
-  // when there's genuinely no vertical room (very zoomed out) do we fall back to the
-  // per-candle bid/ask totals. Off-screen rows are culled in the loop (y==null).
-  const perLevel = ppt >= 6 && cellW >= 14;
-  for (const b of baBars) {
+  // PER-LEVEL ALWAYS (Parag): the bid/ask ladder is the only mode — never the
+  // per-candle sum. The ONLY thing that can suppress a ladder is lack of VERTICAL
+  // room for a single text row (ppt < MIN_PPT, e.g. zoomed way out): then we draw
+  // the thin candle alone and show NOTHING (not sums), exactly like a footprint
+  // collapses when the price axis is zoomed out. NQ spans hundreds of ticks per
+  // screen, so a readable ladder requires zooming into a tight price range — same
+  // as ATAS/Sierra. When candles are dense HORIZONTALLY we draw every Nth bar's
+  // ladder (stride) so numbers don't collide, instead of degrading to sums.
+  const MIN_PPT = 6;                                  // px per 0.25-tick row for one number
+  const canLadder = ppt >= MIN_PPT;
+  const fs = Math.max(5, Math.min(11, Math.floor(ppt) - 1));   // font <= row height
+  baCtx.font = `${fs}px ui-monospace,Menlo,Consolas,monospace`;
+  baCtx.textBaseline = "middle";
+  // horizontal stride: assume ~2-char numbers each side at this font; if a candle
+  // column is narrower than both number columns + body, ladder only every Nth bar.
+  const minLadderW = 2 * (fs * 1.5) + tw + 6;
+  const stride = (!canLadder || cellW >= minLadderW) ? 1
+               : Math.max(1, Math.ceil(minLadderW / cellW));
+  for (let bi = 0; bi < baBars.length; bi++) {
+    const b = baBars[bi];
     const x = ts.timeToCoordinate(b.time);
     if (x == null) continue;
     const yO = candle.priceToCoordinate(b.open), yC = candle.priceToCoordinate(b.close);
@@ -881,51 +935,43 @@ function baDraw() {
     if (yO == null || yC == null || yH == null || yL == null) continue;
     const up = b.close >= b.open;
     const col = up ? "#26a69a" : "#ef5350";
-    // wick
+    // wick + thin body — drawn for EVERY bar so price action stays continuous
     baCtx.strokeStyle = col; baCtx.lineWidth = 1;
     baCtx.beginPath(); baCtx.moveTo(x + 0.5, yH); baCtx.lineTo(x + 0.5, yL); baCtx.stroke();
-    // thin body
     const bodyTop = Math.min(yO, yC), bodyH = Math.max(1, Math.abs(yC - yO));
     baCtx.fillStyle = col; baCtx.fillRect(Math.round(x - tw / 2), bodyTop, tw, bodyH);
 
-    if (perLevel && b.cells && b.cells.length) {
-      // PER-LEVEL ladder: bid (sells, red, LEFT) / ask (buys, green, RIGHT) at each price,
-      // flanking the thin body so nothing merges. Row font <= row height (no vertical overlap).
-      const fs = Math.max(6, Math.min(11, Math.floor(ppt) - 1));
-      baCtx.font = `${fs}px ui-monospace,Menlo,Consolas,monospace`;
-      baCtx.textBaseline = "middle";
-      for (const c of b.cells) {
-        const y = candle.priceToCoordinate(c.p);
-        if (y == null) continue;
-        if (b.poc != null && Math.abs(c.p - b.poc) < 1e-6) {   // POC row highlight
-          baCtx.fillStyle = "rgba(227,209,75,.12)";
-          baCtx.fillRect(x - cellW / 2, y - ppt / 2, cellW, Math.max(1, ppt));
-        }
-        if (c.s) { baCtx.fillStyle = "#ef5350"; baCtx.textAlign = "right"; baCtx.fillText(baFmt(c.s), x - tw / 2 - 2, y); }
-        if (c.b) { baCtx.fillStyle = "#26a69a"; baCtx.textAlign = "left"; baCtx.fillText(baFmt(c.b), x + tw / 2 + 2, y); }
+    // ladder only on readable, non-skipped bars (else: thin candle only — NO sums)
+    if (!canLadder || (bi % stride) !== 0 || !b.cells || !b.cells.length) continue;
+    let tot = 0; for (const c of b.cells) tot += c.s + c.b;           // bar total for the POC band
+    const bandHalf = Math.max(tw, Math.min(cellW * 0.46, avail + tw / 2 + 4));
+    const m = {};
+    for (const c of b.cells) m[c.p.toFixed(2)] = c;                   // price -> cell, for diagonals
+    for (const c of b.cells) {
+      const y = candle.priceToCoordinate(c.p);
+      if (y == null) continue;                                        // off-screen row culled
+      if (b.poc != null && Math.abs(c.p - b.poc) < 1e-6) {
+        // POC row: inverse/grey band spanning the ladder width + total volume centered
+        baCtx.fillStyle = "rgba(139,148,158,.32)";
+        baCtx.fillRect(x - bandHalf, y - ppt / 2, bandHalf * 2, Math.max(1, ppt));
+        baCtx.fillStyle = "#e6edf3"; baCtx.textAlign = "center";
+        baCtx.fillText(baFmt(tot), x, y);
+        continue;
       }
-    } else {
-      // zoomed out for a ladder — show per-candle totals at the candle mid (auto-fit / skip)
-      const cMid = (yH + yL) / 2;
-      const cH = Math.max(2, Math.abs(yL - yH));
-      const bidT = baFmt(b.bid || 0), askT = baFmt(b.ask || 0);
-      let fs = Math.max(6, Math.min(11, Math.floor(cH)));
-      baCtx.font = `${fs}px ui-monospace,Menlo,Consolas,monospace`;
-      let wNeed = Math.max(baCtx.measureText(bidT).width, baCtx.measureText(askT).width);
-      while (fs > 6 && wNeed > avail) {
-        fs -= 1;
-        baCtx.font = `${fs}px ui-monospace,Menlo,Consolas,monospace`;
-        wNeed = Math.max(baCtx.measureText(bidT).width, baCtx.measureText(askT).width);
+      // diagonal imbalance (>=3:1): ask(buy) vs bid one level UP; bid(sell) vs ask one level DOWN.
+      // Dominant side's number turns RED; normal numbers a soft blue-grey.
+      const above = m[(c.p + 0.25).toFixed(2)];   // sells (bid) one tick up
+      const below = m[(c.p - 0.25).toFixed(2)];   // buys (ask) one tick down
+      const bidImb = c.s > 0 && below && below.b > 0 && c.s >= 3 * below.b;
+      const askImb = c.b > 0 && above && above.s > 0 && c.b >= 3 * above.s;
+      if (c.s) {  // BID column = sell-aggressor (hit bid), LEFT
+        baCtx.fillStyle = bidImb ? "#ef5350" : "#9fb6d4";
+        baCtx.textAlign = "right"; baCtx.fillText(baFmt(c.s), x - tw / 2 - 2, y);
       }
-      if (wNeed > avail) continue;
-      baCtx.textBaseline = "middle";
-      const bidW = baCtx.measureText(bidT).width, askW = baCtx.measureText(askT).width;
-      const bh = Math.min(cH, fs + 2);
-      baCtx.fillStyle = "rgba(13,17,23,.55)";
-      baCtx.fillRect(x - tw / 2 - 2 - bidW, cMid - bh / 2, bidW + 2, bh);
-      baCtx.fillRect(x + tw / 2, cMid - bh / 2, askW + 2, bh);
-      baCtx.fillStyle = "#ef5350"; baCtx.textAlign = "right"; baCtx.fillText(bidT, x - tw / 2 - 2, cMid);
-      baCtx.fillStyle = "#26a69a"; baCtx.textAlign = "left"; baCtx.fillText(askT, x + tw / 2 + 2, cMid);
+      if (c.b) {  // ASK column = buy-aggressor (lift ask), RIGHT
+        baCtx.fillStyle = askImb ? "#ef5350" : "#9fb6d4";
+        baCtx.textAlign = "left"; baCtx.fillText(baFmt(c.b), x + tw / 2 + 2, y);
+      }
     }
   }
 }

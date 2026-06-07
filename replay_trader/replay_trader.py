@@ -217,6 +217,13 @@ class ReplaySession:
         self.replay_now_ns = int(TS[self.start_idx])
         self.session_start_ns = int(TS[self.start_idx])
         self._open_win = None       # cached (09:30,09:35) ET window in UTC-ns
+        # session-VWAP running sums (Σpx·sz / Σsz from the 09:30 RTH open). Anchor
+        # is lazily resolved to the first tick >= 09:30 ET; accumulated incrementally
+        # as the cursor advances (never rescans). No-lookahead: only ticks < cursor.
+        self._vwap_anchor = None
+        self._vwap_built_to = self.start_idx
+        self._vwap_pv = 0.0
+        self._vwap_v = 0.0
         self.speed = 1.0
         self.paused = True
         self.ended = False
@@ -324,6 +331,39 @@ class ReplaySession:
             return None
         seg = np.asarray(PX[lo:hi], dtype=np.int64)
         return int(seg.max() - seg.min())
+
+    def _vwap(self, hi_idx):
+        """Session VWAP = Σ(px·sz)/Σ(sz) over SEEN ticks in [anchor, hi_idx), where
+        anchor = first tick >= 09:30 ET (the RTH open). INCREMENTAL: running sums are
+        carried in self._vwap_pv / _vwap_v and only NEW ticks [built_to, hi_idx) are
+        added each call — never a rescan. NO LOOKAHEAD: hi_idx is the cursor, so only
+        ticks strictly before it contribute. Returns the VWAP in DISPLAY points
+        (offset applied), or None before the anchor / with no volume.
+        Cheap: one dot + one sum over the newly-seen ticks per call."""
+        if self._vwap_anchor is None:
+            win_s, _ = self._open_window_ns()
+            a = int(np.searchsorted(TS[self.start_idx:self.end_idx], win_s, side="left")) + self.start_idx
+            self._vwap_anchor = max(a, self.start_idx)
+            self._vwap_built_to = self._vwap_anchor
+        anchor = self._vwap_anchor
+        if hi_idx <= anchor:
+            return None
+        bt = self._vwap_built_to
+        # cursor went backwards (shouldn't in normal flow) -> restart from anchor
+        if hi_idx < bt:
+            self._vwap_pv = 0.0; self._vwap_v = 0.0; bt = anchor
+        if bt < anchor:
+            bt = anchor
+        if hi_idx > bt:
+            seg_px = np.asarray(PX[bt:hi_idx], dtype=np.float64)
+            seg_sz = np.asarray(SZ[bt:hi_idx], dtype=np.float64)
+            self._vwap_pv += float(np.dot(seg_px, seg_sz))
+            self._vwap_v += float(seg_sz.sum())
+            bt = hi_idx
+        self._vwap_built_to = bt
+        if self._vwap_v <= 0:
+            return None
+        return round(self.disp_px(self._vwap_pv / self._vwap_v), 2)
 
     def advance(self):
         """Advance the replay clock to wall-now and process ticks honestly."""
@@ -940,7 +980,7 @@ class ReplaySession:
                 "total": total, "price_hi": prices[-1], "price_lo": prices[0]}
 
     # ---- snapshot for the client ----
-    def snapshot(self, flow=False, heat=False):
+    def snapshot(self, flow=False, heat=False, vwap=False):
         with self.lock:
             cur = self._cur_price()
             open_pnl = None; pos_view = None
@@ -986,6 +1026,9 @@ class ReplaySession:
             # OPEN HEAT readout — same gating: computed only when the study is ON.
             if heat:
                 snap["open5m_range"] = self._open5m_range(self.cursor, self.replay_now_ns)
+            # VWAP readout — same gating: incremental, computed only when ON.
+            if vwap:
+                snap["vwap"] = self._vwap(self.cursor)
             return snap
 
     def stats(self):
@@ -1121,13 +1164,19 @@ def _want_heat():
     return request.args.get("heat") in ("1", "true", "True")
 
 
+def _want_vwap():
+    """True when the client has the VWAP study ON (gates the snapshot VWAP calc)."""
+    return request.args.get("vwap") in ("1", "true", "True")
+
+
 @app.route("/api/state")
 def state():
     s = _sess()
     if s is None:
         return jsonify({"ok": False, "err": "no session"})
     s.advance()
-    return jsonify({"ok": True, **s.snapshot(flow=_want_flow(), heat=_want_heat())})
+    return jsonify({"ok": True, **s.snapshot(flow=_want_flow(), heat=_want_heat(),
+                                             vwap=_want_vwap())})
 
 
 @app.route("/api/bars")
@@ -1142,7 +1191,7 @@ def bars():
     since_v = None if since in (None, "", "null") else int(float(since))
     bars_ = s.build_bars(tf_sec, since_synth=since_v)
     return jsonify({"ok": True, "tf": tf, "bars": bars_,
-                    **s.snapshot(flow=_want_flow(), heat=_want_heat())})
+                    **s.snapshot(flow=_want_flow(), heat=_want_heat(), vwap=_want_vwap())})
 
 
 @app.route("/api/footprint")
