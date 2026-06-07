@@ -397,8 +397,23 @@ async function fetchFootprint() {
   try {
     const from = Math.floor(vr.from) - tfSec * 2;
     const to = Math.ceil(vr.to) + tfSec * 2;
-    const r = await api(`/api/footprint?tf=${TF}&from=${from}&to=${to}`);
-    if (r.ok) { fpData = r.fp || []; drawFootprint(); }
+    const [r, rb] = await Promise.all([
+      api(`/api/footprint?tf=${TF}&from=${from}&to=${to}`),
+      api(`/api/bars?tf=${TF}&since=${from}`),
+    ]);
+    if (r.ok) {
+      const fp = r.fp || [];
+      if (rb && rb.ok) {
+        const ohlc = {};
+        for (const bar of (rb.bars || [])) ohlc[bar.time] = bar;
+        for (const b of fp) {
+          const o = ohlc[b.time];
+          if (o) { b.open = o.open; b.high = o.high; b.low = o.low; b.close = o.close; }
+        }
+      }
+      fpData = fp;
+      drawFootprint();
+    }
   } catch (e) { /* transient */ }
   fpFetching = false;
 }
@@ -473,10 +488,23 @@ function drawFootprint() {
         fpCtx.fillRect(x - Math.max(2, half * 0.6), y - 1, Math.max(4, cellW * 0.6), 2);
       }
     }
-    // per-bar delta under the bar (always, cheap)
-    fpCtx.textAlign = "center"; fpCtx.textBaseline = "bottom";
+    // per-bar delta: above the candle's high if bullish, below the low if bearish
+    fpCtx.textAlign = "center";
     fpCtx.fillStyle = b.delta >= 0 ? "#26a69a" : "#ef5350";
-    fpCtx.fillText((b.delta > 0 ? "+" : "") + b.delta, x, fpH - 3);
+    const dTxt = (b.delta > 0 ? "+" : "") + b.delta;
+    if (b.open != null && b.close != null) {
+      const yH = candle.priceToCoordinate(b.high);
+      const yL = candle.priceToCoordinate(b.low);
+      if (b.close >= b.open && yH != null) {        // bullish -> top of candle
+        fpCtx.textBaseline = "bottom"; fpCtx.fillText(dTxt, x, yH - 4);
+      } else if (b.close < b.open && yL != null) {  // bearish -> bottom of candle
+        fpCtx.textBaseline = "top"; fpCtx.fillText(dTxt, x, yL + 4);
+      } else {                                       // fallback
+        fpCtx.textBaseline = "bottom"; fpCtx.fillText(dTxt, x, fpH - 3);
+      }
+    } else {                                         // no OHLC -> old position
+      fpCtx.textBaseline = "bottom"; fpCtx.fillText(dTxt, x, fpH - 3);
+    }
   }
 }
 
