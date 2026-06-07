@@ -30,6 +30,7 @@ import os
 import secrets
 import threading
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -115,6 +116,83 @@ TF_SECONDS = {"5s": 5, "30s": 30, "1m": 60, "15m": 900}
 def _tf_sec(tf):
     """Map a TF label (e.g. '30s', '15m') to bucket seconds; unknown -> 5s."""
     return TF_SECONDS.get(tf, 5)
+
+
+# ── Discord scoreboard webhook ───────────────────────────────────────────────
+# When a session finishes (End) or is abandoned (a new session starts), the just-
+# completed session's scoreboard card is POSTed to Discord — IFF it had >=1 trade.
+# The URL lives in discord_webhook.txt (single line, gitignored secret); missing or
+# empty -> the feature is silently inert. Posting is fire-and-forget on a daemon
+# thread (never blocks the replay loop / HTTP handler), 5s timeout, errors logged
+# once. CRITICAL: session id + stats ONLY — never the hidden replay date, so future
+# sessions stay blind.
+DISCORD_WEBHOOK_FILE = HERE / "discord_webhook.txt"
+_discord_warned = False   # log a failure / missing-config note at most once
+
+
+def _discord_webhook_url():
+    """Webhook URL from discord_webhook.txt (read fresh each post so dropping the URL
+    in needs no restart). None if the file is missing/empty -> feature inert."""
+    try:
+        if DISCORD_WEBHOOK_FILE.exists():
+            url = DISCORD_WEBHOOK_FILE.read_text(encoding="utf-8").strip()
+            return url or None
+    except Exception:
+        return None
+    return None
+
+
+def _fmt_money(v):
+    return "—" if v is None else f"${v:,.2f}"
+
+
+def build_discord_embed(session_id, stats):
+    """Discord embed dict mirroring the scoreboard card. SESSION ID + STATS ONLY —
+    no hidden date (blinding must hold for future sessions). Color green if net>0."""
+    net = stats.get("net") or 0
+    pf = stats.get("pf")
+    fields = [
+        {"name": "Trades", "value": str(stats.get("n", 0)), "inline": True},
+        {"name": "Net P&L", "value": _fmt_money(stats.get("net")), "inline": True},
+        {"name": "Win rate", "value": f"{stats.get('wr', 0)}%", "inline": True},
+        {"name": "Expectancy/trade", "value": _fmt_money(stats.get("expectancy")), "inline": True},
+        {"name": "Profit factor", "value": "—" if pf is None else f"{pf}", "inline": True},
+        {"name": "Max DD", "value": _fmt_money(stats.get("max_dd")), "inline": True},
+        {"name": "Avg win", "value": _fmt_money(stats.get("avg_win")), "inline": True},
+        {"name": "Avg loss", "value": _fmt_money(stats.get("avg_loss")), "inline": True},
+        {"name": "​", "value": "​", "inline": True},   # spacer -> decomp on its own row
+        {"name": "Day baseline", "value": _fmt_money(stats.get("day_baseline")), "inline": True},
+        {"name": "Timing skill", "value": _fmt_money(stats.get("selection_skill")), "inline": True},
+        {"name": "Direction skill", "value": _fmt_money(stats.get("direction_skill")), "inline": True},
+    ]
+    return {
+        "title": f"Replay Session {session_id}",
+        "color": 0x26A69A if net > 0 else 0xEF5350,
+        "fields": fields,
+    }
+
+
+def _post_discord_async(session_id, stats):
+    """Fire-and-forget POST of the scoreboard embed. Inert if no webhook configured.
+    Never raises; runs on a daemon thread so it can't block the caller."""
+    url = _discord_webhook_url()
+    if not url:
+        return   # silently inert — no network attempt
+    embed = build_discord_embed(session_id, stats)
+
+    def _worker():
+        global _discord_warned
+        try:
+            data = json.dumps({"embeds": [embed]}).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+            urllib.request.urlopen(req, timeout=5)
+        except Exception as e:   # noqa: BLE001 — swallow everything, log once
+            if not _discord_warned:
+                print(f"[replay_trader] discord webhook post failed: {e}")
+                _discord_warned = True
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 def _resolve_dir(path, entry_tick, d, tdist, sdist, trail_tk, arm_tk, slip):
@@ -227,6 +305,7 @@ class ReplaySession:
         self.speed = 1.0
         self.paused = True
         self.ended = False
+        self.posted = False         # Discord scoreboard posted? (prevents double-post)
         self.last_wall = time.time()
 
         # trading state
@@ -595,6 +674,7 @@ class ReplaySession:
         self.ended = True
         self.paused = True
         self._persist_json()
+        self._maybe_post_discord()
 
     # ---- order entry API ----
     @staticmethod
@@ -1118,6 +1198,21 @@ class ReplaySession:
         with open(self._json_path, "w") as f:
             json.dump(data, f, indent=2)
 
+    def _maybe_post_discord(self):
+        """Post this session's scoreboard to Discord ONCE, iff it had >=1 trade and
+        hasn't been posted yet. Idempotent via self.posted, so calling it from both
+        _end_session and the new-session abandon path can never double-post. The
+        actual network call is fire-and-forget; this only computes stats + sets the
+        flag under the lock (RLock -> safe to re-enter from _end_session)."""
+        with self.lock:
+            if self.posted:
+                return
+            st = self.stats()
+            if st.get("n", 0) < 1:
+                return
+            self.posted = True
+        _post_discord_async(self.id, st)
+
     def reveal(self):
         """Only called on explicit session end — reveals the hidden date."""
         return {"date": self._hidden_date, "px_offset_ticks": self.px_offset}
@@ -1149,6 +1244,13 @@ def new_session():
     mode = body.get("mode", "rth")
     slip = body.get("slip_tk", DEFAULT_SLIP_TK)
     with STATE_LOCK:
+        prev = STATE["session"]
+        if prev is not None:
+            # abandon-by-starting-new: post the outgoing session's card once (>=1 trade)
+            try:
+                prev._maybe_post_discord()
+            except Exception:
+                pass
         STATE["session"] = ReplaySession(mode=mode, slip_tk=slip)
         s = STATE["session"]
     return jsonify({"ok": True, **s.snapshot()})
