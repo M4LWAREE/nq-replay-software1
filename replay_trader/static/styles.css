@@ -137,3 +137,31 @@ table#stats td:last-child{text-align:right;font-weight:600}
 /* ── contract selector ───────────────────────────────────────────────────── */
 #instrument{width:100%;background:var(--panel2);color:var(--fg);
   border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:12px;font-weight:600}
+
+/* ── flow light pill (trailing-60s order-flow permission read) ─────────────── */
+.flowpill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
+  border-radius:20px;border:1px solid var(--line);background:var(--panel2);
+  font-size:11px;font-weight:700;letter-spacing:.3px;
+  transition:border-color .12s,background .12s,color .12s}
+.flowpill #flowlabel{font-size:10px;text-transform:uppercase;opacity:.9}
+.flowpill #flowval{min-width:auto;font-size:12px;font-variant-numeric:tabular-nums}
+.flowpill.neutral{border-color:var(--line);color:var(--muted)}
+.flowpill.long{border-color:var(--green);color:var(--green);background:rgba(38,166,154,.12)}
+.flowpill.short{border-color:var(--red);color:var(--red);background:rgba(239,83,80,.12)}
+.flowpill.off{display:none}   /* toggle OFF -> pill gone entirely, no layout gap */
+.flowpill.flash{animation:flowflash .5s ease-out}
+@keyframes flowflash{0%{box-shadow:0 0 0 0 rgba(47,129,247,.65)}
+  100%{box-shadow:0 0 0 6px rgba(47,129,247,0)}}
+
+/* ── open heat pill (5-min opening-range width, 09:30–09:35) ────────────────── */
+.heatpill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
+  border-radius:20px;border:1px solid var(--line);background:var(--panel2);
+  font-size:11px;font-weight:700;letter-spacing:.3px;
+  transition:border-color .12s,background .12s,color .12s}
+.heatpill #heatlabel{font-size:10px;text-transform:uppercase;opacity:.9}
+.heatpill #heatval{min-width:auto;font-size:12px;font-variant-numeric:tabular-nums}
+.heatpill.neutral{border-color:var(--line);color:var(--muted)}
+.heatpill.quiet{border-color:var(--green);color:var(--green);background:rgba(38,166,154,.12)}
+.heatpill.warm{border-color:var(--orange);color:var(--orange);background:rgba(255,159,64,.12)}
+.heatpill.hot{border-color:var(--red);color:var(--red);background:rgba(239,83,80,.14)}
+.heatpill.off{display:none}   /* toggle OFF -> pill gone entirely, no layout gap */

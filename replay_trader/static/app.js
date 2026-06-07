@@ -38,8 +38,11 @@ let posPriceLines = [];
 function clearPosLines() { posPriceLines.forEach((l) => candle.removePriceLine(l)); posPriceLines = []; }
 
 // ── client state ────────────────────────────────────────────────────────────
+// TF label -> bucket seconds. Mirrors the server's TF_SECONDS (one source of
+// truth per side). Adding a TF = one entry here + one button in index.html.
+const TF_SECONDS = { "5s": 5, "30s": 30, "1m": 60, "15m": 900 };
 let TF = "5s";
-let tfSec = 5;
+let tfSec = TF_SECONDS[TF];
 let lastBarTime = null;      // synth time of most-recent applied bar
 let haveSession = false;
 let ended = false;
@@ -159,6 +162,8 @@ function renderState(s) {
       `<div class="big-edge ${sign(edge)}">${money(edge)}</div>`
       + `<div class="cap">edge / trade vs coin-flip&nbsp;·&nbsp;you ${money(st.expectancy)} − coin ${money(st.coinflip_exp)}</div>`;
   }
+  renderFlow(s);
+  renderHeat(s);
   renderTrades(s);
 }
 
@@ -181,7 +186,7 @@ async function poll() {
     // Subtracting tfSec would return an OLDER bucket and make candle.update() throw
     // "Cannot update oldest data", silently killing the live refresh.
     const since = lastBarTime === null ? "" : lastBarTime;
-    const r = await api(`/api/bars?tf=${TF}&since=${since}`);
+    const r = await api(`/api/bars?tf=${TF}&since=${since}${flowOn ? "&flow=1" : ""}${heatOn ? "&heat=1" : ""}`);
     if (r.ok) {
       applyBars(r.bars || [], lastBarTime === null);
       renderState(r);
@@ -229,7 +234,7 @@ $("#btnClose").onclick = async () => { const r = await post("/api/control", { ac
 document.querySelectorAll(".tf").forEach((b) => b.onclick = async () => {
   document.querySelectorAll(".tf").forEach((x) => x.classList.remove("active"));
   b.classList.add("active");
-  TF = b.dataset.tf; tfSec = TF === "5s" ? 5 : 60;
+  TF = b.dataset.tf; tfSec = TF_SECONDS[TF] || 5;
   fpData = []; if (fpOn && fpCtx) fpCtx.clearRect(0, 0, fpW, fpH);
   await fullReload();
   if (fpOn) fetchFootprint();
@@ -277,6 +282,7 @@ async function doOrder(side) {
   const arm_tk = $("#arm").value === "" ? null : +$("#arm").value;
   saveBrackets();
   const r = await post("/api/order", { side, size, stop_tk, target_tk, trail_tk, arm_tk });
+  flowFlash();           // brief acknowledgment tint — never blocks the trade
   renderState(r); poll();
 }
 $("#btnBuy").onclick = () => doOrder("buy");
@@ -658,6 +664,109 @@ document.addEventListener("click", (e) => {
   const w = document.querySelector(".studies-wrap");
   if (w && !w.contains(e.target)) $("#studiesMenu").classList.add("hidden");
 });
+
+// ── flow light ───────────────────────────────────────────────────────────────
+// Always-visible toolbar pill = trailing-60s signed order-flow delta (Σ side×size
+// over SEEN ticks, server-computed no-lookahead). A PERMISSION read for Parag's
+// discretion, NOT a signal: it never blocks a trade. The server only computes the
+// delta when flow is ON (poll appends &flow=1); the per-trade flow_delta_entry is
+// logged server-side at fill time REGARDLESS of the toggle (it's the science
+// record). Default ON, persisted. No-flicker: DOM touched only when state changes.
+const FLOW_KEY = "replay_trader.flow";
+let flowOn = true;
+const flowEl = $("#flowpill");
+let flowLastState = null;   // "long" | "short" | "neutral" | "off"
+let flowLastLabel = null;
+let flowLastVal = null;
+
+function renderFlow(s) {
+  if (!flowEl) return;
+  if (!flowOn) {
+    if (flowLastState !== "off") {
+      flowEl.className = "flowpill off";
+      $("#flowlabel").textContent = "FLOW";
+      $("#flowval").textContent = "off";
+      flowLastState = "off"; flowLastLabel = "FLOW"; flowLastVal = "off";
+    }
+    return;
+  }
+  const d = s ? s.flow_delta_60s : undefined;
+  const thr = (s && s.flow_thresh != null) ? s.flow_thresh : 50;
+  let state, label;
+  if (d === null || d === undefined) { state = "neutral"; label = "FLOW"; }
+  else if (d >= thr)  { state = "long";    label = "LONG"; }
+  else if (d <= -thr) { state = "short";   label = "SHORT"; }
+  else                { state = "neutral"; label = "FLAT"; }
+  if (state !== flowLastState) { flowEl.className = "flowpill " + state; flowLastState = state; }
+  if (label !== flowLastLabel) { $("#flowlabel").textContent = label; flowLastLabel = label; }
+  const vtxt = (d === null || d === undefined) ? "—" : (d > 0 ? "+" : "") + d;
+  if (vtxt !== flowLastVal) { $("#flowval").textContent = vtxt; flowLastVal = vtxt; }
+}
+
+function flowFlash() {
+  if (!flowEl) return;
+  flowEl.classList.remove("flash");
+  void flowEl.offsetWidth;           // force reflow so the animation restarts
+  flowEl.classList.add("flash");
+}
+
+function setFlow(on) {
+  flowOn = on;
+  $("#btnFlow").classList.toggle("active", on);
+  try { localStorage.setItem(FLOW_KEY, on ? "1" : "0"); } catch (_) {}
+  renderFlow(on ? null : undefined);   // reflect off-state / reset to neutral now
+}
+$("#btnFlow").onclick = () => setFlow(!flowOn);
+// default ON: only off when the user explicitly persisted "0"
+try { setFlow(localStorage.getItem(FLOW_KEY) !== "0"); } catch (_) { setFlow(true); }
+
+// ── open heat ──────────────────────────────────────────────────────────────────
+// Always-visible toolbar pill = 5-min opening-range width in ticks (max−min of PX
+// over 09:30:00–09:35:00 ET, server-computed no-lookahead). Live-accumulates until
+// the replay clock passes 09:35, then FREEZES. A RISK-PROTOCOL read for Parag's
+// discretion (his P&L correlates −0.68 with this): green <250 quiet, amber 250–400,
+// red >400 heat protocol. The server only computes it when heat is ON (poll appends
+// &heat=1); open5m_range is logged into the session JSON stats at trade close
+// REGARDLESS of the toggle (the science record). Default ON, persisted. No-flicker:
+// DOM touched only when state changes.
+const HEAT_KEY = "replay_trader.heat";
+let heatOn = true;
+const heatEl = $("#heatpill");
+let heatLastState = null;   // "quiet" | "warm" | "hot" | "neutral" | "off"
+let heatLastVal = null;
+
+function renderHeat(s) {
+  if (!heatEl) return;
+  if (!heatOn) {
+    if (heatLastState !== "off") {
+      heatEl.className = "heatpill off";
+      $("#heatval").textContent = "off";
+      heatLastState = "off"; heatLastVal = "off";
+    }
+    return;
+  }
+  const r = s ? s.open5m_range : undefined;
+  const quiet = (s && s.open_heat_quiet != null) ? s.open_heat_quiet : 250;
+  const hot   = (s && s.open_heat_hot   != null) ? s.open_heat_hot   : 400;
+  let state;
+  if (r === null || r === undefined) state = "neutral";   // before 09:30 / no data
+  else if (r < quiet) state = "quiet";
+  else if (r > hot)   state = "hot";
+  else                state = "warm";
+  if (state !== heatLastState) { heatEl.className = "heatpill " + state; heatLastState = state; }
+  const vtxt = (r === null || r === undefined) ? "—" : r + "tk";
+  if (vtxt !== heatLastVal) { $("#heatval").textContent = vtxt; heatLastVal = vtxt; }
+}
+
+function setHeat(on) {
+  heatOn = on;
+  $("#btnHeat").classList.toggle("active", on);
+  try { localStorage.setItem(HEAT_KEY, on ? "1" : "0"); } catch (_) {}
+  renderHeat(on ? null : undefined);   // reflect off-state / reset to neutral now
+}
+$("#btnHeat").onclick = () => setHeat(!heatOn);
+// default ON: only off when the user explicitly persisted "0"
+try { setHeat(localStorage.getItem(HEAT_KEY) !== "0"); } catch (_) { setHeat(true); }
 
 // ── contract selector: Mini (NQ) ↔ Micro (MNQ) ─────────────────────────────
 // Pure math switch — micro = 1/10 the $/tick & commission of a mini (10 micros

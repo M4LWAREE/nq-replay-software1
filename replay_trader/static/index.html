@@ -26,7 +26,9 @@
     <div class="grp">
       <span class="lbl">TF</span>
       <button class="tf ctl active" data-tf="5s">5s</button>
+      <button class="tf ctl" data-tf="30s">30s</button>
       <button class="tf ctl" data-tf="1m">1m</button>
+      <button class="tf ctl" data-tf="15m">15m</button>
       <span class="seps"></span>
       <div class="studies-wrap">
         <button id="btnStudies" class="ctl" title="Studies / overlays">▦ Studies</button>
@@ -37,6 +39,8 @@
             <button id="btnVPcfg" class="ctl gear" title="Volume Profile settings">⚙</button>
           </div>
           <button id="btnBA" class="ctl menuitem" title="Bid/Ask volume per candle (bid left, ask right)">Bid / Ask</button>
+          <button id="btnFlow" class="ctl menuitem" title="Flow Light: trailing-60s order-flow permission pill in the toolbar (default on). When off, the server skips the calc.">Flow Light</button>
+          <button id="btnHeat" class="ctl menuitem" title="Open Heat: 5-min opening-range width (09:30–09:35) pill in the toolbar (default on). Green &lt;250tk quiet, amber 250–400, red &gt;400 heat protocol. When off, the server skips the calc.">Open Heat</button>
         </div>
       </div>
     </div>
@@ -44,6 +48,15 @@
       <span class="lbl">ET</span><span id="clock" class="val">--:--:--</span>
       <span class="lbl">Px</span><span id="price" class="val">--</span>
       <span class="lbl">Done</span><span id="prog" class="val">0%</span>
+      <span class="seps"></span>
+      <span id="flowpill" class="flowpill neutral"
+            title="Trailing-60s signed order-flow (Σ side×size of seen ticks). A permission read for your discretion — never blocks a trade.">
+        <span id="flowlabel">FLOW</span><span id="flowval" class="val">—</span>
+      </span>
+      <span id="heatpill" class="heatpill neutral"
+            title="5-min opening-range width (09:30–09:35, max−min ticks). Live until 09:35 then frozen. Green &lt;250 quiet — your tape; amber 250–400; red &gt;400 heat protocol: half size, double warmup, wider trail, first stop ends session.">
+        <span id="heatlabel">OPEN</span><span id="heatval" class="val">—</span>
+      </span>
     </div>
     <div class="grp right">
       <button id="btnNew" class="ctl alt">New Session</button>

@@ -58,6 +58,23 @@ TICK_VALUE = 5.0           # $ per tick per contract (NQ)
 COMMISSION_RT = 4.20       # $ round-trip per contract
 DEFAULT_SLIP_TK = 1        # adverse slip ticks on market / stop fills
 
+# FLOW LIGHT — trailing-60s signed order-flow delta (sum of side*size over the
+# last 60s of SEEN replay ticks). A permission read for Parag's discretion, NOT a
+# signal. |delta| >= FLOW_THRESH contracts tints the pill GREEN (long flow) /
+# RED (short flow); within the band it is GREY (neutral). One source of truth —
+# sent to the client in the snapshot so the threshold lives in exactly one place.
+FLOW_WINDOW_NS = 60_000_000_000   # 60s in nanoseconds
+FLOW_THRESH = 50                  # contracts; |delta| >= this -> colored pill
+
+# OPEN HEAT — width (ticks) of the 5-min opening range, max(PX)-min(PX) over the
+# 09:30:00-09:35:00 ET window. Parag's P&L correlates -0.68 with this; quiet opens
+# are his best, opens > OPEN_HEAT_HOT have all ended negative. A risk-protocol read
+# for his discretion, NOT a signal. It live-accumulates until the replay clock
+# passes 09:35, then FREEZES for the session. One source of truth — thresholds are
+# sent to the client in the snapshot so they live in exactly one place.
+OPEN_HEAT_QUIET = 250             # < this tk -> GREEN "quiet — your tape"
+OPEN_HEAT_HOT = 400               # > this tk -> RED "heat protocol"; 250-400 AMBER
+
 # Neutral synthetic date so the x-axis shows real ET time-of-day but NO real date.
 SYNTH_BASE = 1577836800    # 2020-01-01 00:00:00 UTC (epoch seconds)
 
@@ -65,7 +82,8 @@ CSV_HEADER = ["order_id", "side", "size", "entry_et", "exit_et",
               "entry_px_disp", "exit_px_disp", "exit_reason",
               "pnl_ticks", "pnl_net", "mfe_ticks", "mae_ticks",
               "hold_s", "stop_tk", "target_tk", "trail_tk", "arm_tk",
-              "coinflip_ev_net", "random_time_ev_net", "instrument"]
+              "coinflip_ev_net", "random_time_ev_net", "instrument",
+              "flow_delta_entry"]
 
 # ── load tick cache (memmap — read only) ─────────────────────────────────────
 print("[replay_trader] loading tick cache (mmap)...")
@@ -86,6 +104,17 @@ GOOD_SESSIONS = [s for s in ALL_SESSIONS if s["rth_ticks"] >= 5000]
 print(f"[replay_trader] {len(GOOD_SESSIONS)} replayable sessions")
 
 N_RESAMPLE = 128           # random-time control draws per trade
+
+# Supported chart timeframes -> bucket seconds. Single source of truth for tf
+# parsing across /api/bars, /api/footprint, /api/volprofile. The incremental
+# bar/footprint caches are keyed by these tf_sec values, so adding a row here is
+# all it takes to support a new TF. Unknown labels fall back to 5s.
+TF_SECONDS = {"5s": 5, "30s": 30, "1m": 60, "15m": 900}
+
+
+def _tf_sec(tf):
+    """Map a TF label (e.g. '30s', '15m') to bucket seconds; unknown -> 5s."""
+    return TF_SECONDS.get(tf, 5)
 
 
 def _resolve_dir(path, entry_tick, d, tdist, sdist, trail_tk, arm_tk, slip):
@@ -187,6 +216,7 @@ class ReplaySession:
         self.cursor = self.start_idx + 1        # first tick is "seen" to seed a price
         self.replay_now_ns = int(TS[self.start_idx])
         self.session_start_ns = int(TS[self.start_idx])
+        self._open_win = None       # cached (09:30,09:35) ET window in UTC-ns
         self.speed = 1.0
         self.paused = True
         self.ended = False
@@ -244,6 +274,56 @@ class ReplaySession:
         """last seen real price in integer ticks (cursor-1 is last seen tick)."""
         i = max(self.start_idx, self.cursor - 1)
         return int(PX[i])
+
+    def _flow_delta(self, hi_idx, now_ns):
+        """Signed order-flow delta = sum(side*size) over SEEN ticks in the last
+        60s of replay time. NO LOOKAHEAD: bounded strictly to indices in
+        [start_idx, hi_idx) (hi_idx exclusive) and TS >= now_ns - 60s.
+        Returns int contracts (+buy / -sell), or None if no aggressor-side data.
+        Cheap: one searchsorted + one vectorized dot over ~60s of ticks."""
+        if SIDE is None:
+            return None
+        if hi_idx <= self.start_idx:
+            return 0
+        lo_ns = now_ns - FLOW_WINDOW_NS
+        # first SEEN tick with TS >= lo_ns, clamped to the session start
+        lo = int(np.searchsorted(TS[self.start_idx:hi_idx], lo_ns, side="left")) + self.start_idx
+        if lo >= hi_idx:
+            return 0
+        seg_side = np.asarray(SIDE[lo:hi_idx], dtype=np.int64)
+        seg_sz = np.asarray(SZ[lo:hi_idx], dtype=np.int64)
+        return int(np.dot(seg_side, seg_sz))
+
+    def _open_window_ns(self):
+        """(start_ns, end_ns) UTC-ns bounds of the 09:30:00-09:35:00 ET opening
+        window for this session's RTH date. Cached (date never changes)."""
+        if self._open_win is None:
+            s = pd.Timestamp(f"{self._hidden_date} 09:30:00", tz=ET)
+            e = pd.Timestamp(f"{self._hidden_date} 09:35:00", tz=ET)
+            self._open_win = (int(s.value), int(e.value))   # .value = UTC epoch ns
+        return self._open_win
+
+    def _open5m_range(self, hi_idx, now_ns):
+        """OPEN HEAT — 5-min opening-range width in ticks = max(PX)-min(PX) over
+        SEEN ticks in [09:30:00, 09:35:00) ET. Live-accumulates while the replay
+        clock is inside the window; FREEZES once it passes 09:35. NO LOOKAHEAD:
+        the upper index bound is the seen frontier `hi_idx`, additionally capped at
+        the first tick >= 09:35, so the value can never depend on a tick at/after
+        the cursor nor on anything past the 5-min window. Returns int ticks, or
+        None until the replay clock reaches 09:30 (or if the window has no ticks).
+        Cheap: two searchsorted + one vectorized min/max over ~5 min of ticks."""
+        win_s, win_e = self._open_window_ns()
+        if now_ns < win_s or hi_idx <= self.start_idx:
+            return None
+        # cap the upper bound at the first tick >= 09:35 (freeze), but never above
+        # the seen frontier hi_idx (no lookahead while still inside the window).
+        cap = int(np.searchsorted(TS[self.start_idx:hi_idx], win_e, side="left")) + self.start_idx
+        hi = min(hi_idx, cap)
+        lo = int(np.searchsorted(TS[self.start_idx:hi], win_s, side="left")) + self.start_idx
+        if hi <= lo:
+            return None
+        seg = np.asarray(PX[lo:hi], dtype=np.int64)
+        return int(seg.max() - seg.min())
 
     def advance(self):
         """Advance the replay clock to wall-now and process ticks honestly."""
@@ -308,6 +388,10 @@ class ReplaySession:
             "trail_tk": o.get("trail_tk"), "arm_tk": o.get("arm_tk") or 0,
             "trail_armed": False, "trail_stop": None,
             "mfe": 0, "mae": 0,
+            # FLOW LIGHT: trailing-60s signed delta AS OF the fill (tick i is
+            # seen at fill -> hi-bound i+1). Logged ALWAYS, independent of the
+            # client Flow toggle, since it is part of the science record.
+            "flow_delta_entry": self._flow_delta(i + 1, ns),
         }
         self.position = pos
         self._log_event("FILL_ENTRY", side=side, size=o["size"], px=fill, ns=ns, idx=i)
@@ -396,6 +480,7 @@ class ReplaySession:
             "coinflip_ev_net": round(coin, 2),
             "random_time_ev_net": round(rt, 2),
             "instrument": self.instrument,
+            "flow_delta_entry": pos.get("flow_delta_entry"),
         }
         self.trades.append(tr)
         self._log_event("FILL_EXIT", side=side, size=size, px=exit_px, ns=ns, idx=i,
@@ -855,7 +940,7 @@ class ReplaySession:
                 "total": total, "price_hi": prices[-1], "price_lo": prices[0]}
 
     # ---- snapshot for the client ----
-    def snapshot(self):
+    def snapshot(self, flow=False, heat=False):
         with self.lock:
             cur = self._cur_price()
             open_pnl = None; pos_view = None
@@ -881,7 +966,7 @@ class ReplaySession:
             span = self.end_idx - self.start_idx
             if span > 0:
                 pct = round(100.0 * (self.cursor - self.start_idx) / span, 1)
-            return {
+            snap = {
                 "session_id": self.id, "mode": self.mode, "ended": self.ended,
                 "paused": self.paused, "speed": self.speed, "slip_tk": self.slip_tk,
                 "et_clock": self.et_clock(self.replay_now_ns),
@@ -891,7 +976,17 @@ class ReplaySession:
                 "instrument": self.instrument,
                 "tick_value": round(TICK_VALUE * self.cmult, 4),
                 "position": pos_view, "stats": self.stats(),
+                "flow_thresh": FLOW_THRESH,
+                "open_heat_quiet": OPEN_HEAT_QUIET, "open_heat_hot": OPEN_HEAT_HOT,
             }
+            # FLOW LIGHT readout — only when the client asks (toggle ON), so the
+            # searchsorted+dot is skipped entirely when the study is OFF.
+            if flow:
+                snap["flow_delta_60s"] = self._flow_delta(self.cursor, self.replay_now_ns)
+            # OPEN HEAT readout — same gating: computed only when the study is ON.
+            if heat:
+                snap["open5m_range"] = self._open5m_range(self.cursor, self.replay_now_ns)
+            return snap
 
     def stats(self):
         trades = self.trades
@@ -967,11 +1062,15 @@ class ReplaySession:
                         t["hold_s"], t.get("stop_tk"), t.get("target_tk"),
                         t.get("trail_tk"), t.get("arm_tk"),
                         t["coinflip_ev_net"], t.get("random_time_ev_net"),
-                        t.get("instrument")])
+                        t.get("instrument"), t.get("flow_delta_entry")])
 
     def _persist_json(self):
+        # Always stamp the (frozen-if-past-09:35) opening-range width into the
+        # persisted stats for forward validation — independent of the study toggle.
+        st = self.stats()
+        st["open5m_range"] = self._open5m_range(self.cursor, self.replay_now_ns)
         data = {"session_id": self.id, "mode": self.mode, "ended": self.ended,
-                "stats": self.stats(), "trades": self.trades,
+                "stats": st, "trades": self.trades,
                 "hidden_date_sha": secrets.token_hex(0)}  # date intentionally omitted
         with open(self._json_path, "w") as f:
             json.dump(data, f, indent=2)
@@ -1012,13 +1111,23 @@ def new_session():
     return jsonify({"ok": True, **s.snapshot()})
 
 
+def _want_flow():
+    """True when the client has the Flow study ON (gates the snapshot delta calc)."""
+    return request.args.get("flow") in ("1", "true", "True")
+
+
+def _want_heat():
+    """True when the client has the Open Heat study ON (gates the range calc)."""
+    return request.args.get("heat") in ("1", "true", "True")
+
+
 @app.route("/api/state")
 def state():
     s = _sess()
     if s is None:
         return jsonify({"ok": False, "err": "no session"})
     s.advance()
-    return jsonify({"ok": True, **s.snapshot()})
+    return jsonify({"ok": True, **s.snapshot(flow=_want_flow(), heat=_want_heat())})
 
 
 @app.route("/api/bars")
@@ -1028,11 +1137,12 @@ def bars():
         return jsonify({"ok": False, "err": "no session"})
     s.advance()
     tf = request.args.get("tf", "5s")
-    tf_sec = 5 if tf == "5s" else 60
+    tf_sec = _tf_sec(tf)
     since = request.args.get("since")
     since_v = None if since in (None, "", "null") else int(float(since))
     bars_ = s.build_bars(tf_sec, since_synth=since_v)
-    return jsonify({"ok": True, "tf": tf, "bars": bars_, **s.snapshot()})
+    return jsonify({"ok": True, "tf": tf, "bars": bars_,
+                    **s.snapshot(flow=_want_flow(), heat=_want_heat())})
 
 
 @app.route("/api/footprint")
@@ -1044,7 +1154,7 @@ def footprint():
         return jsonify({"ok": False, "err": "no side data"})
     s.advance()
     tf = request.args.get("tf", "5s")
-    tf_sec = 5 if tf == "5s" else 60
+    tf_sec = _tf_sec(tf)
     fr = request.args.get("from"); to = request.args.get("to")
     fr_v = None if fr in (None, "", "null") else int(float(fr))
     to_v = None if to in (None, "", "null") else int(float(to))
@@ -1061,7 +1171,7 @@ def volprofile():
         return jsonify({"ok": False, "err": "no side data"})
     s.advance()
     tf = request.args.get("tf", "5s")
-    tf_sec = 5 if tf == "5s" else 60
+    tf_sec = _tf_sec(tf)
     fr = request.args.get("from")
     to = request.args.get("to")
     fr_v = None if fr in (None, "", "null") else int(float(fr))
