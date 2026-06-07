@@ -127,7 +127,6 @@ def _tf_sec(tf):
 # once. CRITICAL: session id + stats ONLY — never the hidden replay date, so future
 # sessions stay blind.
 DISCORD_WEBHOOK_FILE = HERE / "discord_webhook.txt"
-_discord_warned = False   # log a failure / missing-config note at most once
 
 
 def _discord_webhook_url():
@@ -172,25 +171,33 @@ def build_discord_embed(session_id, stats):
     }
 
 
+# Discord sits behind Cloudflare, which returns 403 Forbidden to the DEFAULT
+# "Python-urllib/x.y" User-Agent. Without a real UA every webhook post is silently
+# rejected — so this header is load-bearing, not cosmetic.
+DISCORD_UA = "Mozilla/5.0 (replay-trader scoreboard webhook)"
+
+
 def _post_discord_async(session_id, stats):
     """Fire-and-forget POST of the scoreboard embed. Inert if no webhook configured.
-    Never raises; runs on a daemon thread so it can't block the caller."""
+    Never raises; runs on a daemon thread so it can't block the caller. Logs the
+    outcome of EVERY attempt with flush=True so failures are visible immediately
+    (the server's stdout is block-buffered to its log file otherwise)."""
     url = _discord_webhook_url()
     if not url:
         return   # silently inert — no network attempt
     embed = build_discord_embed(session_id, stats)
 
     def _worker():
-        global _discord_warned
         try:
             data = json.dumps({"embeds": [embed]}).encode("utf-8")
             req = urllib.request.Request(
-                url, data=data, headers={"Content-Type": "application/json"}, method="POST")
-            urllib.request.urlopen(req, timeout=5)
-        except Exception as e:   # noqa: BLE001 — swallow everything, log once
-            if not _discord_warned:
-                print(f"[replay_trader] discord webhook post failed: {e}")
-                _discord_warned = True
+                url, data=data,
+                headers={"Content-Type": "application/json", "User-Agent": DISCORD_UA},
+                method="POST")
+            resp = urllib.request.urlopen(req, timeout=5)
+            print(f"[replay_trader] discord post OK ({resp.status}) for {session_id}", flush=True)
+        except Exception as e:   # noqa: BLE001 — never let a post crash anything
+            print(f"[replay_trader] discord webhook post FAILED for {session_id}: {e!r}", flush=True)
 
     threading.Thread(target=_worker, daemon=True).start()
 
