@@ -1,0 +1,11 @@
+{
+  "tick_size": 0.25,
+  "n_ticks": 44820093,
+  "first_ns": 1761782400075783267,
+  "last_ns": 1777507199113994429,
+  "first_utc": "2025-10-30 00:00:00.075783267+00:00",
+  "last_utc": "2026-04-29 23:59:59.113994429+00:00",
+  "price_unit": "integer ticks (price / 0.25)",
+  "clock": "ts_event (exchange matching-engine time), UTC ns",
+  "source": "data/nq_trades_6mo.pkl"
+}

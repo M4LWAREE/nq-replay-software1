@@ -1,0 +1,5 @@
+replay_trader/sessions/*.csv
+replay_trader/sessions/*.json
+__pycache__/
+.venv/
+tick_engine/cache/*.npy

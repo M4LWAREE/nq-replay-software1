@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Replay Trader — NQ tick replay</title>
+<link rel="stylesheet" href="/static/styles.css"/>
+<script src="/static/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<div id="app">
+  <!-- top control bar -->
+  <header id="topbar">
+    <div class="grp brand">REPLAY&nbsp;TRADER</div>
+    <div class="grp">
+      <button id="btnPlay" class="ctl">▶ Play</button>
+      <span class="seps"></span>
+      <span class="lbl">Speed</span>
+      <button class="spd ctl" data-spd="1">1×</button>
+      <button class="spd ctl" data-spd="2">2×</button>
+      <button class="spd ctl" data-spd="5">5×</button>
+      <button class="spd ctl" data-spd="20">20×</button>
+      <button id="btnJump" class="ctl">Jump +5m</button>
+      <button id="btnClose" class="ctl" title="Jump to :59 of the current 1-min bar, then pause (key 9)">→ :59</button>
+    </div>
+    <div class="grp">
+      <span class="lbl">TF</span>
+      <button class="tf ctl active" data-tf="5s">5s</button>
+      <button class="tf ctl" data-tf="1m">1m</button>
+    </div>
+    <div class="grp readout">
+      <span class="lbl">ET</span><span id="clock" class="val">--:--:--</span>
+      <span class="lbl">Px</span><span id="price" class="val">--</span>
+      <span class="lbl">Done</span><span id="prog" class="val">0%</span>
+    </div>
+    <div class="grp right">
+      <button id="btnNew" class="ctl alt">New Session</button>
+      <button id="btnEnd" class="ctl danger">End &amp; Reveal</button>
+    </div>
+  </header>
+
+  <div id="main">
+    <!-- chart -->
+    <section id="chartwrap">
+      <div id="chart"></div>
+      <div id="paused-badge" class="badge">PAUSED — press Space / Play</div>
+    </section>
+
+    <!-- side panel -->
+    <aside id="side">
+      <div class="card" id="tradecard">
+        <h3>Trade</h3>
+        <div class="row">
+          <label>Lots <input id="lots" type="number" min="1" step="1" value="1"/></label>
+        </div>
+        <div class="row">
+          <label>Stop (tk) <input id="stop" type="number" min="0" step="1" placeholder="ticks"/></label>
+          <label>Target (tk) <input id="target" type="number" min="0" step="1" placeholder="ticks"/></label>
+        </div>
+        <div class="row">
+          <label>Trail (tk) <input id="trail" type="number" min="0" step="1" placeholder="off"/></label>
+          <label>Arm at +X (tk) <input id="arm" type="number" min="0" step="1" placeholder="0"/></label>
+        </div>
+        <div class="row presets">
+          <button class="ctl preset" data-stop="5" data-target="40">5 / 40</button>
+          <button class="ctl preset" data-stop="10" data-target="20">10 / 20</button>
+          <button class="ctl preset" data-stop="40" data-target="5">40 / 5</button>
+        </div>
+        <div class="row btns">
+          <button id="btnBuy" class="big buy">BUY (B)</button>
+          <button id="btnSell" class="big sell">SELL (S)</button>
+        </div>
+        <div class="row">
+          <button id="btnFlat" class="big flat">FLATTEN (F)</button>
+        </div>
+        <div class="hint">Stop/Target/Trail are TICK offsets from your fill. <b>Trail</b> = ratchet distance (peak − N tk); <b>Arm at +X</b> = trail only starts after +X tk profit (0 = from entry). Blank/0 Trail = off. Editable while in a position — type new ticks &amp; hit Apply (recomputed from the original fill; trail never loosens).</div>
+        <div class="row"><button id="btnApply" class="ctl">Apply stop/target/trail</button></div>
+      </div>
+
+      <div class="card" id="poscard">
+        <h3>Position</h3>
+        <div id="posbody" class="muted">— flat —</div>
+      </div>
+
+      <div class="card" id="scorecard">
+        <h3>Scoreboard <span class="sub">(this session)</span></h3>
+        <table id="stats"></table>
+        <div id="edgebox" class="edgebox"></div>
+      </div>
+
+      <div class="card" id="tradescard">
+        <h3>Trades</h3>
+        <div id="tradeslist" class="tradeslist"></div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- how-to / summary modal -->
+  <div id="overlay" class="hidden">
+    <div id="modal">
+      <div id="modalbody"></div>
+      <div class="modalbtns">
+        <button id="modalNew" class="ctl alt">New Random Session</button>
+        <button id="modalClose" class="ctl">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="help">
+    <b>How to use:</b> Press <b>Play</b> (or Space) to start the tape. Bars build tick-by-tick in real time.
+    <b>BUY</b>/<b>SELL</b> (keys B/S) open a market order at the next print +slip; set Stop/Target first or
+    edit them live then <b>Apply</b>. <b>FLATTEN</b> (F) closes now. The date is hidden and prices are
+    offset — you're reading the tape blind. Your net is scored against a <b>coin-flip</b> taking the same
+    trades in a random direction: <b>edge/trade</b> is your real edge. End &amp; Reveal shows the date.
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
