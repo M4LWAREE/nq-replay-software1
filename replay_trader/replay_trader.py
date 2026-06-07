@@ -131,7 +131,8 @@ def _resolve_dir(path, entry_tick, d, tdist, sdist, trail_tk, arm_tk, slip):
     return exit_px
 
 
-def coin_ev_path(path, entry_tick, tdist, sdist, size, slip, trail_tk=None, arm_tk=0):
+def coin_ev_path(path, entry_tick, tdist, sdist, size, slip, trail_tk=None, arm_tk=0,
+                 tick_value=TICK_VALUE, commission=COMMISSION_RT):
     """Both-direction-averaged net coin-flip EV over a FIXED tick path.
 
     Resolves each direction via `_resolve_dir` (target-before-stop, trailing-stop
@@ -144,7 +145,7 @@ def coin_ev_path(path, entry_tick, tdist, sdist, size, slip, trail_tk=None, arm_
     for d in (1, -1):
         entry = entry_tick + d * slip
         ex_px = _resolve_dir(path, entry_tick, d, tdist, sdist, trail_tk, arm_tk, slip)
-        outs.append((ex_px - entry) * d * TICK_VALUE * size - COMMISSION_RT * size)
+        outs.append((ex_px - entry) * d * tick_value * size - commission * size)
     return 0.5 * (outs[0] + outs[1])
 
 
@@ -164,6 +165,8 @@ class ReplaySession:
         self.id = datetime.now().strftime("%Y%m%d_%H%M%S_") + secrets.token_hex(3)
         self.mode = mode
         self.slip_tk = int(slip_tk)
+        self.instrument = "mini"   # "mini" (NQ) or "micro" (MNQ)
+        self.cmult = 1.0           # micro = 0.1 (10 micros = 1 mini)
 
         sess = secrets.choice(GOOD_SESSIONS)
         self._hidden_date = sess["date"]  # NEVER sent to client
@@ -353,12 +356,19 @@ class ReplaySession:
                 self._close(i, px + self.slip_tk, ns,
                             "TRAIL" if eff_is_trail else "STOP"); return
 
+    def set_instrument(self, name):
+        name = "micro" if str(name).lower().startswith("micro") else "mini"
+        with self.lock:
+            self.instrument = name
+            self.cmult = 0.1 if name == "micro" else 1.0
+        return {"instrument": self.instrument}
+
     def _close(self, i, exit_px, ns, reason):
         pos = self.position; self.position = None
         side = pos["side"]; size = pos["size"]
         pnl_ticks = (exit_px - pos["entry_px"]) * side
-        gross = pnl_ticks * TICK_VALUE * size
-        net = gross - COMMISSION_RT * size
+        gross = pnl_ticks * TICK_VALUE * self.cmult * size
+        net = gross - COMMISSION_RT * self.cmult * size
         hold_s = (ns - pos["entry_ns"]) / 1e9
         coin = self._coinflip_ev(pos, i)
         # random-time DAY baseline: same bracket at random RTH times, held the
@@ -379,6 +389,7 @@ class ReplaySession:
             "trail_tk": pos.get("trail_tk"), "arm_tk": pos.get("arm_tk"),
             "coinflip_ev_net": round(coin, 2),
             "random_time_ev_net": round(rt, 2),
+            "instrument": self.instrument,
         }
         self.trades.append(tr)
         self._log_event("FILL_EXIT", side=side, size=size, px=exit_px, ns=ns, idx=i,
@@ -398,7 +409,9 @@ class ReplaySession:
         return coin_ev_path(path, int(PX[ei]), pos.get("target_tk"),
                             pos.get("stop_tk"), pos["size"], self.slip_tk,
                             trail_tk=pos.get("trail_tk"),
-                            arm_tk=pos.get("arm_tk") or 0)
+                            arm_tk=pos.get("arm_tk") or 0,
+                            tick_value=TICK_VALUE * self.cmult,
+                            commission=COMMISSION_RT * self.cmult)
 
     def _random_time_ev(self, pos, hi_idx):
         """Random-time DAY baseline: the SAME bracket (this trade's tdist/sdist/
@@ -435,7 +448,9 @@ class ReplaySession:
             wend = min(max(wend, ridx + 1), hi - 1)
             path = np.asarray(PX[ridx:wend + 1], dtype=np.int64)
             evs.append(coin_ev_path(path, int(PX[ridx]), tdist, sdist, size, slip,
-                                    trail_tk=trail_tk, arm_tk=arm_tk))
+                                    trail_tk=trail_tk, arm_tk=arm_tk,
+                                    tick_value=TICK_VALUE * self.cmult,
+                                    commission=COMMISSION_RT * self.cmult))
         return float(np.mean(evs))
 
     def _end_session(self):
@@ -770,6 +785,69 @@ class ReplaySession:
                     out.append(self._fp_bar_view(fb, c["cur"]))
             return out
 
+    # ---- volume profile (no lookahead: reuses footprint cells) ----
+    def build_volume_profile(self, tf_sec, from_synth=None, to_synth=None,
+                             rows=0, va_pct=70.0):
+        """Aggregate buy/sell volume by price across [from_synth, to_synth].
+        Reuses the footprint cache (display prices, no-lookahead). Returns
+        per-level rows plus POC and value-area (VAH/VAL) bounds. Optional
+        row-binning collapses the per-0.25 levels into `rows` price buckets."""
+        fp = self.build_footprint(tf_sec, from_synth=from_synth, to_synth=to_synth)
+        buy = {}
+        sell = {}
+        for b in fp:
+            for c in b.get("cells", []):
+                p = round(float(c["p"]), 2)
+                buy[p] = buy.get(p, 0) + int(c["b"])
+                sell[p] = sell.get(p, 0) + int(c["s"])
+        prices = sorted(set(buy) | set(sell))
+        if not prices:
+            return {"levels": [], "poc": None, "vah": None, "val": None,
+                    "total": 0, "price_hi": None, "price_lo": None}
+        levels = [{"p": p, "b": buy.get(p, 0), "s": sell.get(p, 0),
+                   "v": buy.get(p, 0) + sell.get(p, 0)} for p in prices]
+        # optional binning into `rows` even price buckets for a cleaner profile
+        if rows and rows > 0 and len(levels) > rows:
+            lo = prices[0]
+            hi = prices[-1]
+            span = hi - lo
+            bin_sz = span / rows if span > 0 else TICK_SIZE
+            binned = {}
+            for lv in levels:
+                k = int((lv["p"] - lo) / bin_sz) if bin_sz > 0 else 0
+                if k >= rows:
+                    k = rows - 1
+                d = binned.setdefault(k, {"b": 0, "s": 0, "v": 0})
+                d["b"] += lv["b"]
+                d["s"] += lv["s"]
+                d["v"] += lv["v"]
+            levels = []
+            for k in sorted(binned):
+                d = binned[k]
+                levels.append({"p": round(lo + (k + 0.5) * bin_sz, 2),
+                               "b": d["b"], "s": d["s"], "v": d["v"]})
+        total = sum(lv["v"] for lv in levels)
+        poc_i = max(range(len(levels)), key=lambda i: levels[i]["v"])
+        poc = levels[poc_i]["p"]
+        # value area: expand around the POC, always taking the heavier neighbor,
+        # until cumulative volume reaches va_pct of the total.
+        target = total * (va_pct / 100.0)
+        lo_i = hi_i = poc_i
+        acc = levels[poc_i]["v"]
+        while acc < target and (lo_i > 0 or hi_i < len(levels) - 1):
+            up = levels[hi_i + 1]["v"] if hi_i < len(levels) - 1 else -1
+            dn = levels[lo_i - 1]["v"] if lo_i > 0 else -1
+            if up >= dn:
+                hi_i += 1
+                acc += max(up, 0)
+            else:
+                lo_i -= 1
+                acc += max(dn, 0)
+        val = levels[lo_i]["p"]
+        vah = levels[hi_i]["p"]
+        return {"levels": levels, "poc": poc, "vah": vah, "val": val,
+                "total": total, "price_hi": prices[-1], "price_lo": prices[0]}
+
     # ---- snapshot for the client ----
     def snapshot(self):
         with self.lock:
@@ -778,7 +856,7 @@ class ReplaySession:
             if self.position is not None:
                 p = self.position
                 pnl_ticks = (cur - p["entry_px"]) * p["side"]
-                open_pnl = round(pnl_ticks * TICK_VALUE * p["size"], 2)
+                open_pnl = round(pnl_ticks * TICK_VALUE * self.cmult * p["size"], 2)
                 trail_disp = (None if not p.get("trail_armed") or p.get("trail_stop") is None
                               else round(self.disp_px(p["trail_stop"]), 2))
                 pos_view = {
@@ -804,6 +882,8 @@ class ReplaySession:
                 "cur_price": round(self.disp_px(cur), 2),
                 "progress_pct": pct,
                 "pending": (self.pending is not None),
+                "instrument": self.instrument,
+                "tick_value": round(TICK_VALUE * self.cmult, 4),
                 "position": pos_view, "stats": self.stats(),
             }
 
@@ -872,7 +952,7 @@ class ReplaySession:
                         "entry_px_disp", "exit_px_disp", "exit_reason",
                         "pnl_ticks", "pnl_net", "mfe_ticks", "mae_ticks",
                         "hold_s", "stop_tk", "target_tk", "trail_tk", "arm_tk",
-                        "coinflip_ev_net", "random_time_ev_net"])
+                        "coinflip_ev_net", "random_time_ev_net", "instrument"])
 
     def _append_trade_csv(self, t):
         with open(self._csv_path, "a", newline="") as f:
@@ -882,7 +962,8 @@ class ReplaySession:
                         t["pnl_ticks"], t["pnl_net"], t["mfe_ticks"], t["mae_ticks"],
                         t["hold_s"], t.get("stop_tk"), t.get("target_tk"),
                         t.get("trail_tk"), t.get("arm_tk"),
-                        t["coinflip_ev_net"], t.get("random_time_ev_net")])
+                        t["coinflip_ev_net"], t.get("random_time_ev_net"),
+                        t.get("instrument")])
 
     def _persist_json(self):
         data = {"session_id": self.id, "mode": self.mode, "ended": self.ended,
@@ -967,6 +1048,27 @@ def footprint():
     return jsonify({"ok": True, "tf": tf, "fp": fp})
 
 
+@app.route("/api/volprofile")
+def volprofile():
+    s = _sess()
+    if s is None:
+        return jsonify({"ok": False, "err": "no session"})
+    if SIDE is None:
+        return jsonify({"ok": False, "err": "no side data"})
+    s.advance()
+    tf = request.args.get("tf", "5s")
+    tf_sec = 5 if tf == "5s" else 60
+    fr = request.args.get("from")
+    to = request.args.get("to")
+    fr_v = None if fr in (None, "", "null") else int(float(fr))
+    to_v = None if to in (None, "", "null") else int(float(to))
+    rows = int(float(request.args.get("rows", 0) or 0))
+    va = float(request.args.get("va", 70) or 70)
+    vp = s.build_volume_profile(tf_sec, from_synth=fr_v, to_synth=to_v,
+                                rows=rows, va_pct=va)
+    return jsonify({"ok": True, "tf": tf, **vp})
+
+
 @app.route("/api/control", methods=["POST"])
 def control():
     s = _sess()
@@ -984,6 +1086,8 @@ def control():
         s.jump(float(b.get("seconds", 300)))
     elif act == "to_close":
         s.jump_to_close()
+    elif act == "instrument":
+        s.set_instrument(b.get("instrument", "mini"))
     return jsonify({"ok": True, **s.snapshot()})
 
 

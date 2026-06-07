@@ -99,3 +99,41 @@ table#stats td:last-child{text-align:right;font-weight:600}
   color:var(--muted);font-size:11px;line-height:1.5}
 #help b{color:var(--fg)}
 .hidden{display:none}
+
+/* ── volume profile overlay + config ─────────────────────────────────────── */
+#vpcanvas{position:absolute;inset:0;z-index:3;pointer-events:none}
+#vpcanvas.hidden{display:none}
+.ctl.gear{padding:5px 8px;font-size:13px;line-height:1}
+.vpcfg{position:absolute;top:8px;right:8px;z-index:7;width:208px;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:10px 12px;box-shadow:0 8px 26px rgba(0,0,0,.5);
+  display:flex;flex-direction:column;gap:8px}
+.vpcfg.hidden{display:none}
+.vpcfg-h{font-weight:700;font-size:12px;letter-spacing:.4px;color:var(--accent);
+  text-transform:uppercase;margin-bottom:2px}
+.vpcfg label{display:flex;align-items:center;justify-content:space-between;
+  gap:8px;color:var(--muted);font-size:12px}
+.vpcfg input[type=number],.vpcfg select{width:84px;background:var(--panel2);
+  color:var(--fg);border:1px solid var(--line);border-radius:6px;
+  padding:3px 6px;font-size:12px;font-variant-numeric:tabular-nums}
+.vpcfg label.vpck{justify-content:flex-start;cursor:pointer}
+.vpcfg label.vpck input{width:auto;margin-right:6px;accent-color:var(--accent)}
+
+/* ── bid/ask overlay ─────────────────────────────────────────────────────── */
+#bacanvas{position:absolute;inset:0;z-index:4;pointer-events:none}
+#bacanvas.hidden{display:none}
+
+/* ── studies waffle menu ─────────────────────────────────────────────────── */
+.studies-wrap{position:relative;display:inline-flex}
+.studies-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:8;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:8px;box-shadow:0 8px 26px rgba(0,0,0,.5);
+  display:flex;flex-direction:column;gap:6px;min-width:170px}
+.studies-menu.hidden{display:none}
+.studies-menu .menuitem{width:100%;text-align:left}
+.studies-menu .menurow{display:flex;gap:6px}
+.studies-menu .menurow .menuitem{flex:1}
+
+/* ── contract selector ───────────────────────────────────────────────────── */
+#instrument{width:100%;background:var(--panel2);color:var(--fg);
+  border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:12px;font-weight:600}

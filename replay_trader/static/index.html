@@ -28,7 +28,17 @@
       <button class="tf ctl active" data-tf="5s">5s</button>
       <button class="tf ctl" data-tf="1m">1m</button>
       <span class="seps"></span>
-      <button id="btnFoot" class="ctl" title="Footprint: per-bar buy×sell volume by price (zoom in to see cells)">Footprint</button>
+      <div class="studies-wrap">
+        <button id="btnStudies" class="ctl" title="Studies / overlays">▦ Studies</button>
+        <div id="studiesMenu" class="studies-menu hidden">
+          <button id="btnFoot" class="ctl menuitem" title="Footprint: per-bar buy×sell volume by price (zoom in to see cells)">Footprint</button>
+          <div class="menurow">
+            <button id="btnVP" class="ctl menuitem" title="Fixed-range Volume Profile (volume traded at each price)">Vol Profile</button>
+            <button id="btnVPcfg" class="ctl gear" title="Volume Profile settings">⚙</button>
+          </div>
+          <button id="btnBA" class="ctl menuitem" title="Bid/Ask volume per candle (bid left, ask right)">Bid / Ask</button>
+        </div>
+      </div>
     </div>
     <div class="grp readout">
       <span class="lbl">ET</span><span id="clock" class="val">--:--:--</span>
@@ -46,6 +56,27 @@
     <section id="chartwrap">
       <div id="chart"></div>
       <canvas id="fpcanvas" class="hidden"></canvas>
+      <canvas id="vpcanvas" class="hidden"></canvas>
+      <canvas id="bacanvas" class="hidden"></canvas>
+      <div id="vpcfg" class="vpcfg hidden">
+        <div class="vpcfg-h">Volume Profile</div>
+        <label>Range
+          <select id="vpMode">
+            <option value="visible">Visible range</option>
+            <option value="session">Whole session</option>
+          </select>
+        </label>
+        <label>Rows <input id="vpRows" type="number" min="0" max="200" step="1" value="48"/></label>
+        <label>Value area % <input id="vpVA" type="number" min="0" max="100" step="1" value="70"/></label>
+        <label>Width % <input id="vpWidth" type="number" min="5" max="60" step="1" value="30"/></label>
+        <label>Opacity % <input id="vpOpacity" type="number" min="10" max="100" step="5" value="80"/></label>
+        <label>Side
+          <select id="vpSide"><option value="right">Right</option><option value="left">Left</option></select>
+        </label>
+        <label class="vpck"><input id="vpVAband" type="checkbox" checked/> Value-area shading</label>
+        <label class="vpck"><input id="vpSplit" type="checkbox" checked/> Buy / sell split</label>
+        <label class="vpck"><input id="vpShowPoc" type="checkbox" checked/> POC line</label>
+      </div>
       <div id="paused-badge" class="badge">PAUSED — press Space / Play</div>
     </section>
 
@@ -55,6 +86,12 @@
         <h3>Trade</h3>
         <div class="row">
           <label>Lots <input id="lots" type="number" min="1" step="1" value="1"/></label>
+        </div>
+        <div class="row">
+          <label>Contract <select id="instrument">
+            <option value="mini">Mini · NQ ($5/tk)</option>
+            <option value="micro">Micro · MNQ ($0.50/tk)</option>
+          </select></label>
         </div>
         <div class="row">
           <label>Stop (tk) <input id="stop" type="number" min="0" step="1" placeholder="ticks"/></label>

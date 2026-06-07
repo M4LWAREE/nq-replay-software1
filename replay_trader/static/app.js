@@ -492,3 +492,348 @@ document.querySelector('.spd[data-spd="1"]').classList.add("active");
 
 // auto-start a session on load
 newSession();
+
+// ── fixed-range volume profile overlay ──────────────────────────────────────
+// Volume traded at each price across a chosen range (visible window or whole
+// session). Server side reuses the same no-lookahead footprint aggregation.
+// Default OFF and zero-overhead when off: no fetch, no draw, canvas hidden.
+const VP_KEY = "replay_trader.volprofile";
+const VPCFG_KEY = "replay_trader.volprofile.cfg";
+let vpOn = false;
+let vpData = null;
+let vpFetching = false;
+const vpcv = $("#vpcanvas");
+let vpCtx = null, vpW = 0, vpH = 0;
+
+const vpCfg = { mode: "visible", rows: 48, va: 70, width: 30, opacity: 80,
+                side: "right", band: true, split: true, poc: true };
+
+function vpLoadCfg() {
+  try { Object.assign(vpCfg, JSON.parse(localStorage.getItem(VPCFG_KEY) || "{}")); } catch (_) {}
+  $("#vpMode").value = vpCfg.mode; $("#vpRows").value = vpCfg.rows;
+  $("#vpVA").value = vpCfg.va; $("#vpWidth").value = vpCfg.width;
+  $("#vpOpacity").value = vpCfg.opacity; $("#vpSide").value = vpCfg.side;
+  $("#vpVAband").checked = vpCfg.band; $("#vpSplit").checked = vpCfg.split;
+  $("#vpShowPoc").checked = vpCfg.poc;
+}
+function vpSaveCfg() {
+  vpCfg.mode = $("#vpMode").value;
+  vpCfg.rows = Math.max(0, +$("#vpRows").value || 0);
+  vpCfg.va = Math.min(100, Math.max(0, +$("#vpVA").value || 70));
+  vpCfg.width = Math.min(60, Math.max(5, +$("#vpWidth").value || 30));
+  vpCfg.opacity = Math.min(100, Math.max(10, +$("#vpOpacity").value || 80));
+  vpCfg.side = $("#vpSide").value;
+  vpCfg.band = $("#vpVAband").checked;
+  vpCfg.split = $("#vpSplit").checked;
+  vpCfg.poc = $("#vpShowPoc").checked;
+  try { localStorage.setItem(VPCFG_KEY, JSON.stringify(vpCfg)); } catch (_) {}
+}
+
+function vpResize() {
+  const wrap = $("#chartwrap");
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+  vpcv.width = Math.round(w * dpr); vpcv.height = Math.round(h * dpr);
+  vpcv.style.width = w + "px"; vpcv.style.height = h + "px";
+  vpCtx = vpcv.getContext("2d");
+  vpCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  vpW = w; vpH = h;
+}
+
+async function vpFetch() {
+  if (!vpOn || !haveSession || vpFetching) return;
+  vpFetching = true;
+  try {
+    let from = "", to = "";
+    if (vpCfg.mode === "visible") {
+      const vr = chart.timeScale().getVisibleRange();
+      if (vr) { from = Math.floor(vr.from); to = Math.ceil(vr.to); }
+    }
+    const r = await api(`/api/volprofile?tf=${TF}&from=${from}&to=${to}&rows=${vpCfg.rows}&va=${vpCfg.va}`);
+    if (r.ok) { vpData = r; vpDraw(); }
+  } catch (e) { /* transient */ }
+  vpFetching = false;
+}
+
+function vpDraw() {
+  if (!vpOn || !vpCtx) return;
+  vpCtx.clearRect(0, 0, vpW, vpH);
+  if (!vpData || !vpData.levels || !vpData.levels.length) return;
+  const L = vpData.levels;
+  const maxV = L.reduce((m, x) => (x.v > m ? x.v : m), 0) || 1;
+  const ys = L.map((x) => candle.priceToCoordinate(x.p));
+  const gaps = [];
+  for (let i = 1; i < ys.length; i++)
+    if (ys[i] != null && ys[i - 1] != null) gaps.push(Math.abs(ys[i] - ys[i - 1]));
+  gaps.sort((a, b) => a - b);
+  let rowH = gaps.length ? gaps[gaps.length >> 1] : 4;
+  if (!isFinite(rowH) || rowH <= 0) rowH = 4;
+  const barH = Math.max(1, rowH * 0.86);
+  const axisPad = 58;
+  const plotW = Math.max(40, vpW - axisPad);
+  const maxLen = plotW * (vpCfg.width / 100);
+  const op = vpCfg.opacity / 100;
+  const anchorRight = vpCfg.side === "right";
+  const xEdge = anchorRight ? (vpW - axisPad) : 2;
+  if (vpCfg.band && vpData.vah != null && vpData.val != null) {
+    const yT = candle.priceToCoordinate(vpData.vah);
+    const yB = candle.priceToCoordinate(vpData.val);
+    if (yT != null && yB != null) {
+      vpCtx.fillStyle = `rgba(77,159,255,${0.07 * op})`;
+      vpCtx.fillRect(0, Math.min(yT, yB) - barH / 2, vpW, Math.abs(yB - yT) + barH);
+    }
+  }
+  for (const lv of L) {
+    const y = candle.priceToCoordinate(lv.p);
+    if (y == null) continue;
+    const len = (lv.v / maxV) * maxLen;
+    const top = y - barH / 2;
+    const inVA = vpData.vah != null && lv.p <= vpData.vah + 1e-6 && lv.p >= vpData.val - 1e-6;
+    const a = (inVA ? 1 : 0.55) * op;
+    if (vpCfg.split && lv.v > 0) {
+      const buyLen = len * (lv.b / lv.v), sellLen = len - buyLen;
+      if (anchorRight) {
+        let x = xEdge;
+        vpCtx.fillStyle = `rgba(38,166,154,${a})`; vpCtx.fillRect(x - buyLen, top, buyLen, barH); x -= buyLen;
+        vpCtx.fillStyle = `rgba(239,83,80,${a})`; vpCtx.fillRect(x - sellLen, top, sellLen, barH);
+      } else {
+        let x = xEdge;
+        vpCtx.fillStyle = `rgba(38,166,154,${a})`; vpCtx.fillRect(x, top, buyLen, barH); x += buyLen;
+        vpCtx.fillStyle = `rgba(239,83,80,${a})`; vpCtx.fillRect(x, top, sellLen, barH);
+      }
+    } else {
+      vpCtx.fillStyle = `rgba(77,159,255,${a})`;
+      vpCtx.fillRect(anchorRight ? xEdge - len : xEdge, top, len, barH);
+    }
+  }
+  if (vpCfg.poc && vpData.poc != null) {
+    const y = candle.priceToCoordinate(vpData.poc);
+    if (y != null) {
+      vpCtx.strokeStyle = `rgba(227,209,75,${Math.min(1, op + 0.1)})`;
+      vpCtx.lineWidth = 1.5;
+      vpCtx.beginPath(); vpCtx.moveTo(0, y); vpCtx.lineTo(vpW, y); vpCtx.stroke();
+    }
+  }
+}
+
+function setVP(on) {
+  vpOn = on;
+  $("#btnVP").classList.toggle("active", on);
+  vpcv.classList.toggle("hidden", !on);
+  try { localStorage.setItem(VP_KEY, on ? "1" : "0"); } catch (_) {}
+  if (on) { vpResize(); vpFetch(); }
+  else { vpData = null; if (vpCtx) vpCtx.clearRect(0, 0, vpW, vpH); }
+}
+$("#btnVP").onclick = () => setVP(!vpOn);
+$("#btnVPcfg").onclick = () => $("#vpcfg").classList.toggle("hidden");
+
+["vpMode", "vpRows", "vpVA", "vpWidth", "vpOpacity", "vpSide", "vpVAband", "vpSplit", "vpShowPoc"]
+  .forEach((id) => {
+    const el = $("#" + id); if (!el) return;
+    el.addEventListener("change", () => {
+      vpSaveCfg();
+      if (["vpRows", "vpVA", "vpMode"].includes(id)) vpFetch(); else vpDraw();
+    });
+  });
+
+let vpSched = null;
+function vpScheduleFetch() {
+  if (!vpOn || vpCfg.mode !== "visible") return;
+  if (vpSched) clearTimeout(vpSched);
+  vpSched = setTimeout(vpFetch, 90);
+}
+chart.timeScale().subscribeVisibleTimeRangeChange(() => { if (vpOn) { vpDraw(); vpScheduleFetch(); } });
+chart.timeScale().subscribeVisibleLogicalRangeChange(() => { if (vpOn) { vpDraw(); vpScheduleFetch(); } });
+new ResizeObserver(() => { if (vpOn) { vpResize(); vpDraw(); } }).observe($("#chart"));
+
+// throttled live refresh — the profile grows as new ticks print (zero work when off)
+setInterval(() => { if (vpOn && haveSession) vpFetch(); }, 600);
+
+vpLoadCfg();
+try { if (localStorage.getItem(VP_KEY) === "1") setVP(true); } catch (_) {}
+
+// ── studies waffle menu ─────────────────────────────────────────────────────
+$("#btnStudies").onclick = (e) => { e.stopPropagation(); $("#studiesMenu").classList.toggle("hidden"); };
+document.addEventListener("click", (e) => {
+  const w = document.querySelector(".studies-wrap");
+  if (w && !w.contains(e.target)) $("#studiesMenu").classList.add("hidden");
+});
+
+// ── contract selector: Mini (NQ) ↔ Micro (MNQ) ─────────────────────────────
+// Pure math switch — micro = 1/10 the $/tick & commission of a mini (10 micros
+// = 1 mini). Lets you hold wider/longer for the same dollar risk. No new data.
+const INSTR_KEY = "replay_trader.instrument";
+const instrEl = $("#instrument");
+async function instrApply() {
+  try { await post("/api/control", { action: "instrument", instrument: instrEl.value }); } catch (_) {}
+}
+if (instrEl) {
+  try { const v = localStorage.getItem(INSTR_KEY); if (v) instrEl.value = v; } catch (_) {}
+  instrEl.addEventListener("change", () => {
+    try { localStorage.setItem(INSTR_KEY, instrEl.value); } catch (_) {}
+    instrApply();
+  });
+  setTimeout(instrApply, 800);                 // re-apply after the auto new_session on load
+  $("#btnNew").addEventListener("click", () => setTimeout(instrApply, 500));
+  $("#modalNew").addEventListener("click", () => setTimeout(instrApply, 500));
+}
+
+// ── bid / ask per-candle overlay ────────────────────────────────────────────
+// When ON: the chart's normal (fat) candles are hidden and we draw THIN custom
+// candles on the overlay, then flank each one with its volume traded at the bid
+// (aggressive sells, LEFT) and at the ask (aggressive buys, RIGHT). Numbers sit
+// OUTSIDE the thin body so nothing merges, and their height is clamped to the
+// candle's own high–low span. Reuses /api/bars (OHLC) + /api/footprint (b/a).
+// Default OFF, zero overhead when off (normal candles restored).
+const BA_KEY = "replay_trader.bidask";
+const BA_CANDLE_ON = { upColor: "#26a69a", downColor: "#ef5350",
+  wickUpColor: "#26a69a", wickDownColor: "#ef5350", borderVisible: false };
+const BA_CANDLE_HIDDEN = { upColor: "rgba(0,0,0,0)", downColor: "rgba(0,0,0,0)",
+  wickUpColor: "rgba(0,0,0,0)", wickDownColor: "rgba(0,0,0,0)", borderVisible: false };
+let baOn = false, baBars = [], baFetching = false;
+const bacv = $("#bacanvas");
+let baCtx = null, baW = 0, baH = 0;
+const baFmt = (n) => (n >= 100000 ? (n / 1000).toFixed(0) + "k"
+  : n >= 10000 ? (n / 1000).toFixed(1) + "k" : String(n));
+
+function baResize() {
+  const wrap = $("#chartwrap");
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+  bacv.width = Math.round(w * dpr); bacv.height = Math.round(h * dpr);
+  bacv.style.width = w + "px"; bacv.style.height = h + "px";
+  baCtx = bacv.getContext("2d");
+  baCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  baW = w; baH = h;
+}
+
+async function baFetch() {
+  if (!baOn || !haveSession || baFetching) return;
+  const vr = chart.timeScale().getVisibleRange();
+  if (!vr) { return; }
+  baFetching = true;
+  try {
+    const from = Math.floor(vr.from) - tfSec * 2;
+    const to = Math.ceil(vr.to) + tfSec * 2;
+    const [rb, rf] = await Promise.all([
+      api(`/api/bars?tf=${TF}&since=${from}`),
+      api(`/api/footprint?tf=${TF}&from=${from}&to=${to}`),
+    ]);
+    const fp = {};
+    if (rf && rf.ok) for (const b of (rf.fp || [])) {
+      let bid = 0, ask = 0;
+      for (const c of (b.cells || [])) { bid += c.s; ask += c.b; }
+      fp[b.time] = { cells: b.cells || [], poc: b.poc, bid, ask };
+    }
+    if (rb && rb.ok) {
+      baBars = (rb.bars || [])
+        .filter((b) => b.time >= from - 1 && b.time <= to + 1)
+        .map((b) => Object.assign({}, b, fp[b.time] || { cells: [], poc: null, bid: 0, ask: 0 }));
+      baDraw();
+    }
+  } catch (e) { /* transient */ }
+  baFetching = false;
+}
+
+function baDraw() {
+  if (!baOn || !baCtx) return;
+  baCtx.clearRect(0, 0, baW, baH);
+  if (!baBars.length) return;
+  const ts = chart.timeScale();
+  const xs = baBars.map((b) => ts.timeToCoordinate(b.time));
+  const gaps = [];
+  for (let i = 1; i < xs.length; i++)
+    if (xs[i] != null && xs[i - 1] != null) gaps.push(xs[i] - xs[i - 1]);
+  gaps.sort((a, b) => a - b);
+  let cellW = gaps.length ? gaps[gaps.length >> 1] : (ts.options().barSpacing || 8);
+  if (!isFinite(cellW) || cellW <= 0) cellW = 8;
+  const tw = Math.max(2, Math.min(7, Math.round(cellW * 0.18)));   // thin body width
+  // pixels per 0.25-tick price level (probe off the first bar that has cells)
+  let ppt = 0;
+  const probe = baBars.find((b) => b.cells && b.cells.length);
+  if (probe) {
+    const p0 = probe.cells[0].p;
+    const y0 = candle.priceToCoordinate(p0), y1 = candle.priceToCoordinate(p0 + 0.25);
+    if (y0 != null && y1 != null) ppt = Math.abs(y0 - y1);
+  }
+  const avail = cellW / 2 - tw / 2 - 3;                  // px outside the body, each side
+  const perLevel = cellW >= 18 && ppt >= 8 && avail >= 8; // enough room for a price ladder
+  for (const b of baBars) {
+    const x = ts.timeToCoordinate(b.time);
+    if (x == null) continue;
+    const yO = candle.priceToCoordinate(b.open), yC = candle.priceToCoordinate(b.close);
+    const yH = candle.priceToCoordinate(b.high), yL = candle.priceToCoordinate(b.low);
+    if (yO == null || yC == null || yH == null || yL == null) continue;
+    const up = b.close >= b.open;
+    const col = up ? "#26a69a" : "#ef5350";
+    // wick
+    baCtx.strokeStyle = col; baCtx.lineWidth = 1;
+    baCtx.beginPath(); baCtx.moveTo(x + 0.5, yH); baCtx.lineTo(x + 0.5, yL); baCtx.stroke();
+    // thin body
+    const bodyTop = Math.min(yO, yC), bodyH = Math.max(1, Math.abs(yC - yO));
+    baCtx.fillStyle = col; baCtx.fillRect(Math.round(x - tw / 2), bodyTop, tw, bodyH);
+
+    if (perLevel && b.cells && b.cells.length) {
+      // PER-LEVEL ladder: bid (sells, red, LEFT) / ask (buys, green, RIGHT) at each price,
+      // flanking the thin body so nothing merges. Row font <= row height (no vertical overlap).
+      const fs = Math.max(6, Math.min(11, Math.floor(ppt) - 1));
+      baCtx.font = `${fs}px ui-monospace,Menlo,Consolas,monospace`;
+      baCtx.textBaseline = "middle";
+      for (const c of b.cells) {
+        const y = candle.priceToCoordinate(c.p);
+        if (y == null) continue;
+        if (b.poc != null && Math.abs(c.p - b.poc) < 1e-6) {   // POC row highlight
+          baCtx.fillStyle = "rgba(227,209,75,.12)";
+          baCtx.fillRect(x - cellW / 2, y - ppt / 2, cellW, Math.max(1, ppt));
+        }
+        if (c.s) { baCtx.fillStyle = "#ef5350"; baCtx.textAlign = "right"; baCtx.fillText(baFmt(c.s), x - tw / 2 - 2, y); }
+        if (c.b) { baCtx.fillStyle = "#26a69a"; baCtx.textAlign = "left"; baCtx.fillText(baFmt(c.b), x + tw / 2 + 2, y); }
+      }
+    } else {
+      // zoomed out for a ladder — show per-candle totals at the candle mid (auto-fit / skip)
+      const cMid = (yH + yL) / 2;
+      const cH = Math.max(2, Math.abs(yL - yH));
+      const bidT = baFmt(b.bid || 0), askT = baFmt(b.ask || 0);
+      let fs = Math.max(6, Math.min(11, Math.floor(cH)));
+      baCtx.font = `${fs}px ui-monospace,Menlo,Consolas,monospace`;
+      let wNeed = Math.max(baCtx.measureText(bidT).width, baCtx.measureText(askT).width);
+      while (fs > 6 && wNeed > avail) {
+        fs -= 1;
+        baCtx.font = `${fs}px ui-monospace,Menlo,Consolas,monospace`;
+        wNeed = Math.max(baCtx.measureText(bidT).width, baCtx.measureText(askT).width);
+      }
+      if (wNeed > avail) continue;
+      baCtx.textBaseline = "middle";
+      const bidW = baCtx.measureText(bidT).width, askW = baCtx.measureText(askT).width;
+      const bh = Math.min(cH, fs + 2);
+      baCtx.fillStyle = "rgba(13,17,23,.55)";
+      baCtx.fillRect(x - tw / 2 - 2 - bidW, cMid - bh / 2, bidW + 2, bh);
+      baCtx.fillRect(x + tw / 2, cMid - bh / 2, askW + 2, bh);
+      baCtx.fillStyle = "#ef5350"; baCtx.textAlign = "right"; baCtx.fillText(bidT, x - tw / 2 - 2, cMid);
+      baCtx.fillStyle = "#26a69a"; baCtx.textAlign = "left"; baCtx.fillText(askT, x + tw / 2 + 2, cMid);
+    }
+  }
+}
+
+function setBA(on) {
+  baOn = on;
+  $("#btnBA").classList.toggle("active", on);
+  bacv.classList.toggle("hidden", !on);
+  candle.applyOptions(on ? BA_CANDLE_HIDDEN : BA_CANDLE_ON);  // thin custom candles when on
+  try { localStorage.setItem(BA_KEY, on ? "1" : "0"); } catch (_) {}
+  if (on) { baResize(); baFetch(); }
+  else { baBars = []; if (baCtx) baCtx.clearRect(0, 0, baW, baH); }
+}
+$("#btnBA").onclick = () => setBA(!baOn);
+
+let baSched = null;
+function baScheduleFetch() {
+  if (!baOn) return;
+  if (baSched) clearTimeout(baSched);
+  baSched = setTimeout(baFetch, 70);
+}
+chart.timeScale().subscribeVisibleTimeRangeChange(() => { if (baOn) { baDraw(); baScheduleFetch(); } });
+chart.timeScale().subscribeVisibleLogicalRangeChange(() => { if (baOn) { baDraw(); baScheduleFetch(); } });
+new ResizeObserver(() => { if (baOn) { baResize(); baDraw(); } }).observe($("#chart"));
+setInterval(() => { if (baOn && haveSession) baFetch(); }, 300);  // keeps thin candles + b/a live
+try { if (localStorage.getItem(BA_KEY) === "1") setBA(true); } catch (_) {}

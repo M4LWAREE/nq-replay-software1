@@ -1,5 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Large market data (distribute via Releases, not git)
+tick_engine/cache/*.npy
+*.pkl
+*.dbn
+
+# Personal session logs
 replay_trader/sessions/*.csv
 replay_trader/sessions/*.json
-__pycache__/
-.venv/
-tick_engine/cache/*.npy
+
+# Local working files
+*.log
+.vp_backup_*/
+.DS_Store

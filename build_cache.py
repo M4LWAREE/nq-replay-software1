@@ -1,0 +1,20 @@
+import pandas as pd, numpy as np, os, time, json
+t0=time.time()
+CACHE="tick_engine/cache"
+os.makedirs(CACHE, exist_ok=True)
+print("reading pkl...", flush=True)
+df = pd.read_pickle('/Users/diegosanchez/StrategyLab/nq_trades_6mo.pkl')
+print(f"rows={len(df):,} ({time.time()-t0:.1f}s)", flush=True)
+ts = df['ts_event'].view('int64').to_numpy() if hasattr(df['ts_event'],'view') else df['ts_event'].astype('int64').to_numpy()
+ts = df['ts_event'].astype('int64').to_numpy()  # ns UTC
+px = np.round(df['price'].to_numpy()/0.25).astype(np.int32)
+sz = df['size'].to_numpy().astype(np.int32)
+s = df['side'].to_numpy()
+side = np.where(s=='B',1,np.where(s=='A',-1,0)).astype(np.int8)
+print(f"arrays built ({time.time()-t0:.1f}s) side B={int((side==1).sum()):,} A={int((side==-1).sum()):,} N={int((side==0).sum()):,}", flush=True)
+np.save(os.path.join(CACHE,"nq_ticks_ts.npy"), ts)
+np.save(os.path.join(CACHE,"nq_ticks_px.npy"), px)
+np.save(os.path.join(CACHE,"nq_ticks_sz.npy"), sz)
+np.save(os.path.join(CACHE,"nq_ticks_side.npy"), side)
+print(f"saved ({time.time()-t0:.1f}s)", flush=True)
+print("DONE", flush=True)
