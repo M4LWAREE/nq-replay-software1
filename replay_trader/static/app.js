@@ -849,6 +849,31 @@ let baCtx = null, baW = 0, baH = 0;
 const baFmt = (n) => (n >= 100000 ? (n / 1000).toFixed(0) + "k"
   : n >= 10000 ? (n / 1000).toFixed(1) + "k" : String(n));
 
+// ADAPTIVE LEVEL BINNING: choose a bin size (in ticks) so each rendered ladder row
+// keeps a roughly constant pixel height — fine 1-tick rows zoomed in, coarse combined
+// rows zoomed out, constant font throughout. Clean snap increments (ticks -> points):
+// 1=0.25 · 2=0.5 · 4=1 · 10=2.5 · 20=5 · 40=10 · 100=25 · 200=50 · 400=100.
+const BA_TARGET_ROW_PX = 12;
+const BA_BIN_SNAPS = [1, 2, 4, 10, 20, 40, 100, 200, 400];
+function baSnapBin(t) {
+  for (const s of BA_BIN_SNAPS) if (t <= s) return s;
+  return BA_BIN_SNAPS[BA_BIN_SNAPS.length - 1];
+}
+// Aggregate footprint cells into constant-height price bins. Bin key = floor(priceTicks
+// / binTicks) on the absolute tick grid (so bins align across bars and across zoom).
+// Conserves volume exactly: every cell maps to exactly one bin (Σbinned == Σraw).
+function baBinCells(cells, binTicks) {
+  const bins = new Map();
+  for (const c of cells) {
+    const pt = Math.round(c.p / 0.25);                 // display price -> integer ticks
+    const k = Math.floor(pt / binTicks);
+    let e = bins.get(k);
+    if (!e) { e = { k: k, b: 0, s: 0 }; bins.set(k, e); }
+    e.b += c.b; e.s += c.s;
+  }
+  return bins;
+}
+
 function baResize() {
   const wrap = $("#chartwrap");
   const w = wrap.clientWidth, h = wrap.clientHeight;
@@ -863,7 +888,11 @@ function baResize() {
 async function baFetch() {
   if (!baOn || !haveSession || baFetching) return;
   const vr = chart.timeScale().getVisibleRange();
-  if (!vr) { return; }
+  // No mappable range (e.g. zoomed/panned past the data) — keep drawing what we
+  // already have and bail WITHOUT setting the in-flight guard, so the next zoom/
+  // interval retries cleanly. (Root-cause of the "vanishes till restart" bug: an
+  // early return here used to leave the ladder un-refetched on zoom-back-in.)
+  if (!vr) { baDraw(); return; }
   baFetching = true;
   try {
     const from = Math.floor(vr.from) - tfSec * 2;
@@ -880,100 +909,96 @@ async function baFetch() {
       baBars = (rb.bars || [])
         .filter((b) => b.time >= from - 1 && b.time <= to + 1)
         .map((b) => Object.assign({}, b, fp[b.time] || { cells: [], poc: null }));
-      baDraw();
     }
+    baDraw();
   } catch (e) { /* transient */ }
-  baFetching = false;
+  finally { baFetching = false; }   // ALWAYS release the guard — never stays stuck
 }
 
 function baDraw() {
   if (!baOn || !baCtx) return;
-  baCtx.clearRect(0, 0, baW, baH);
-  if (!baBars.length) return;
-  const ts = chart.timeScale();
-  const xs = baBars.map((b) => ts.timeToCoordinate(b.time));
-  const gaps = [];
-  for (let i = 1; i < xs.length; i++)
-    if (xs[i] != null && xs[i - 1] != null) gaps.push(xs[i] - xs[i - 1]);
-  gaps.sort((a, b) => a - b);
-  let cellW = gaps.length ? gaps[gaps.length >> 1] : (ts.options().barSpacing || 8);
-  if (!isFinite(cellW) || cellW <= 0) cellW = 8;
-  const tw = Math.max(2, Math.min(7, Math.round(cellW * 0.18)));   // thin body width
-  // pixels per 0.25-tick price level (probe off the first bar that has cells)
-  let ppt = 0;
-  const probe = baBars.find((b) => b.cells && b.cells.length);
-  if (probe) {
-    const p0 = probe.cells[0].p;
-    const y0 = candle.priceToCoordinate(p0), y1 = candle.priceToCoordinate(p0 + 0.25);
-    if (y0 != null && y1 != null) ppt = Math.abs(y0 - y1);
-  }
-  const avail = cellW / 2 - tw / 2 - 3;                  // px outside the body, each side
-  // PER-LEVEL ALWAYS (Parag): the bid/ask ladder is the only mode — never the
-  // per-candle sum. The ONLY thing that can suppress a ladder is lack of VERTICAL
-  // room for a single text row (ppt < MIN_PPT, e.g. zoomed way out): then we draw
-  // the thin candle alone and show NOTHING (not sums), exactly like a footprint
-  // collapses when the price axis is zoomed out. NQ spans hundreds of ticks per
-  // screen, so a readable ladder requires zooming into a tight price range — same
-  // as ATAS/Sierra. When candles are dense HORIZONTALLY we draw every Nth bar's
-  // ladder (stride) so numbers don't collide, instead of degrading to sums.
-  const MIN_PPT = 6;                                  // px per 0.25-tick row for one number
-  const canLadder = ppt >= MIN_PPT;
-  const fs = Math.max(5, Math.min(11, Math.floor(ppt) - 1));   // font <= row height
-  baCtx.font = `${fs}px ui-monospace,Menlo,Consolas,monospace`;
-  baCtx.textBaseline = "middle";
-  // horizontal stride: assume ~2-char numbers each side at this font; if a candle
-  // column is narrower than both number columns + body, ladder only every Nth bar.
-  const minLadderW = 2 * (fs * 1.5) + tw + 6;
-  const stride = (!canLadder || cellW >= minLadderW) ? 1
-               : Math.max(1, Math.ceil(minLadderW / cellW));
-  for (let bi = 0; bi < baBars.length; bi++) {
-    const b = baBars[bi];
-    const x = ts.timeToCoordinate(b.time);
-    if (x == null) continue;
-    const yO = candle.priceToCoordinate(b.open), yC = candle.priceToCoordinate(b.close);
-    const yH = candle.priceToCoordinate(b.high), yL = candle.priceToCoordinate(b.low);
-    if (yO == null || yC == null || yH == null || yL == null) continue;
-    const up = b.close >= b.open;
-    const col = up ? "#26a69a" : "#ef5350";
-    // wick + thin body — drawn for EVERY bar so price action stays continuous
-    baCtx.strokeStyle = col; baCtx.lineWidth = 1;
-    baCtx.beginPath(); baCtx.moveTo(x + 0.5, yH); baCtx.lineTo(x + 0.5, yL); baCtx.stroke();
-    const bodyTop = Math.min(yO, yC), bodyH = Math.max(1, Math.abs(yC - yO));
-    baCtx.fillStyle = col; baCtx.fillRect(Math.round(x - tw / 2), bodyTop, tw, bodyH);
+  try {
+    baCtx.clearRect(0, 0, baW, baH);
+    if (!baBars.length) return;
+    const ts = chart.timeScale();
+    const xs = baBars.map((b) => ts.timeToCoordinate(b.time));
+    const gaps = [];
+    for (let i = 1; i < xs.length; i++)
+      if (xs[i] != null && xs[i - 1] != null) gaps.push(xs[i] - xs[i - 1]);
+    gaps.sort((a, b) => a - b);
+    let cellW = gaps.length ? gaps[gaps.length >> 1] : (ts.options().barSpacing || 8);
+    if (!isFinite(cellW) || cellW <= 0) cellW = 8;
+    const tw = Math.max(2, Math.min(7, Math.round(cellW * 0.18)));   // thin body width
+    // px per single tick (0.25 pt) from a VISIBLE bar's close — robust probe so the
+    // ladder never gets stuck blank just because one cell price is off-screen.
+    let ppt = 0;
+    for (const b of baBars) {
+      const y0 = candle.priceToCoordinate(b.close), y1 = candle.priceToCoordinate(b.close + 0.25);
+      if (y0 != null && y1 != null && Math.abs(y0 - y1) > 0) { ppt = Math.abs(y0 - y1); break; }
+    }
+    if (ppt <= 0) ppt = 1;   // last-ditch fallback; candles still draw, ladder retries next frame
+    // ADAPTIVE BIN: pick bin ticks so each row is ~BA_TARGET_ROW_PX tall, font constant.
+    const binTicks = baSnapBin(Math.max(1, Math.ceil(BA_TARGET_ROW_PX / ppt)));
+    const rowPx = Math.max(1, binTicks * ppt);
+    const fs = Math.max(8, Math.min(11, Math.round(rowPx) - 2));   // ~constant font at every zoom
+    baCtx.font = `${fs}px ui-monospace,Menlo,Consolas,monospace`;
+    baCtx.textBaseline = "middle";
+    const avail = cellW / 2 - tw / 2 - 3;
+    // horizontal stride: if a candle column is narrower than both number columns +
+    // body, ladder only every Nth bar (numbers don't collide) — never fall back to sums.
+    const minLadderW = 2 * (fs * 1.5) + tw + 6;
+    const stride = (cellW >= minLadderW) ? 1 : Math.max(1, Math.ceil(minLadderW / cellW));
+    for (let bi = 0; bi < baBars.length; bi++) {
+      const b = baBars[bi];
+      const x = ts.timeToCoordinate(b.time);
+      if (x == null) continue;
+      const yO = candle.priceToCoordinate(b.open), yC = candle.priceToCoordinate(b.close);
+      const yH = candle.priceToCoordinate(b.high), yL = candle.priceToCoordinate(b.low);
+      if (yO == null || yC == null || yH == null || yL == null) continue;
+      const up = b.close >= b.open;
+      const col = up ? "#26a69a" : "#ef5350";
+      // wick + thin body — drawn for EVERY bar so price action stays continuous
+      baCtx.strokeStyle = col; baCtx.lineWidth = 1;
+      baCtx.beginPath(); baCtx.moveTo(x + 0.5, yH); baCtx.lineTo(x + 0.5, yL); baCtx.stroke();
+      const bodyTop = Math.min(yO, yC), bodyH = Math.max(1, Math.abs(yC - yO));
+      baCtx.fillStyle = col; baCtx.fillRect(Math.round(x - tw / 2), bodyTop, tw, bodyH);
 
-    // ladder only on readable, non-skipped bars (else: thin candle only — NO sums)
-    if (!canLadder || (bi % stride) !== 0 || !b.cells || !b.cells.length) continue;
-    let tot = 0; for (const c of b.cells) tot += c.s + c.b;           // bar total for the POC band
-    const bandHalf = Math.max(tw, Math.min(cellW * 0.46, avail + tw / 2 + 4));
-    const m = {};
-    for (const c of b.cells) m[c.p.toFixed(2)] = c;                   // price -> cell, for diagonals
-    for (const c of b.cells) {
-      const y = candle.priceToCoordinate(c.p);
-      if (y == null) continue;                                        // off-screen row culled
-      if (b.poc != null && Math.abs(c.p - b.poc) < 1e-6) {
-        // POC row: inverse/grey band spanning the ladder width + total volume centered
-        baCtx.fillStyle = "rgba(139,148,158,.32)";
-        baCtx.fillRect(x - bandHalf, y - ppt / 2, bandHalf * 2, Math.max(1, ppt));
-        baCtx.fillStyle = "#e6edf3"; baCtx.textAlign = "center";
-        baCtx.fillText(baFmt(tot), x, y);
-        continue;
-      }
-      // diagonal imbalance (>=3:1): ask(buy) vs bid one level UP; bid(sell) vs ask one level DOWN.
-      // Dominant side's number turns RED; normal numbers a soft blue-grey.
-      const above = m[(c.p + 0.25).toFixed(2)];   // sells (bid) one tick up
-      const below = m[(c.p - 0.25).toFixed(2)];   // buys (ask) one tick down
-      const bidImb = c.s > 0 && below && below.b > 0 && c.s >= 3 * below.b;
-      const askImb = c.b > 0 && above && above.s > 0 && c.b >= 3 * above.s;
-      if (c.s) {  // BID column = sell-aggressor (hit bid), LEFT
-        baCtx.fillStyle = bidImb ? "#ef5350" : "#9fb6d4";
-        baCtx.textAlign = "right"; baCtx.fillText(baFmt(c.s), x - tw / 2 - 2, y);
-      }
-      if (c.b) {  // ASK column = buy-aggressor (lift ask), RIGHT
-        baCtx.fillStyle = askImb ? "#ef5350" : "#9fb6d4";
-        baCtx.textAlign = "left"; baCtx.fillText(baFmt(c.b), x + tw / 2 + 2, y);
+      if ((bi % stride) !== 0 || !b.cells || !b.cells.length) continue;
+      // bin the raw cells into constant-height rows (conserves volume exactly)
+      const bins = baBinCells(b.cells, binTicks);
+      let pocK = null, pocV = -1;
+      for (const e of bins.values()) { const t = e.b + e.s; if (t > pocV) { pocV = t; pocK = e.k; } }
+      const bandHalf = Math.max(tw, Math.min(cellW * 0.46, avail + tw / 2 + 4));
+      for (const e of bins.values()) {
+        // bin center price (ticks) -> display points; rows tile by rowPx without gaps
+        const centerPt = e.k * binTicks + (binTicks - 1) / 2;
+        const y = candle.priceToCoordinate(centerPt * 0.25);
+        if (y == null) continue;                                        // off-screen row culled
+        if (e.k === pocK) {
+          // POC bin: inverse/grey band spanning the ladder width + total volume centered
+          baCtx.fillStyle = "rgba(139,148,158,.32)";
+          baCtx.fillRect(x - bandHalf, y - rowPx / 2, bandHalf * 2, rowPx);
+          baCtx.fillStyle = "#e6edf3"; baCtx.textAlign = "center";
+          baCtx.fillText(baFmt(e.b + e.s), x, y);
+          continue;
+        }
+        // diagonal imbalance (>=3:1) on the BINNED ladder: ask(buy) vs bid one BIN UP;
+        // bid(sell) vs ask one BIN DOWN. Dominant side's number turns RED; rest blue-grey.
+        const above = bins.get(e.k + 1);   // sells (bid) one bin up
+        const below = bins.get(e.k - 1);   // buys (ask) one bin down
+        const bidImb = e.s > 0 && below && below.b > 0 && e.s >= 3 * below.b;
+        const askImb = e.b > 0 && above && above.s > 0 && e.b >= 3 * above.s;
+        if (e.s) {  // BID column = sell-aggressor (hit bid), LEFT
+          baCtx.fillStyle = bidImb ? "#ef5350" : "#9fb6d4";
+          baCtx.textAlign = "right"; baCtx.fillText(baFmt(e.s), x - tw / 2 - 2, y);
+        }
+        if (e.b) {  // ASK column = buy-aggressor (lift ask), RIGHT
+          baCtx.fillStyle = askImb ? "#ef5350" : "#9fb6d4";
+          baCtx.textAlign = "left"; baCtx.fillText(baFmt(e.b), x + tw / 2 + 2, y);
+        }
       }
     }
-  }
+  } catch (e) { /* never let a draw error kill the study / its subscriptions */ }
 }
 
 function setBA(on) {
