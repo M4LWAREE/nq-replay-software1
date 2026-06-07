@@ -27,6 +27,8 @@
       <span class="lbl">TF</span>
       <button class="tf ctl active" data-tf="5s">5s</button>
       <button class="tf ctl" data-tf="1m">1m</button>
+      <span class="seps"></span>
+      <button id="btnFoot" class="ctl" title="Footprint: per-bar buy×sell volume by price (zoom in to see cells)">Footprint</button>
     </div>
     <div class="grp readout">
       <span class="lbl">ET</span><span id="clock" class="val">--:--:--</span>
@@ -43,6 +45,7 @@
     <!-- chart -->
     <section id="chartwrap">
       <div id="chart"></div>
+      <canvas id="fpcanvas" class="hidden"></canvas>
       <div id="paused-badge" class="badge">PAUSED — press Space / Play</div>
     </section>
 

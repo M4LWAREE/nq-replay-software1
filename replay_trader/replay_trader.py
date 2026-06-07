@@ -196,6 +196,13 @@ class ReplaySession:
         # Fresh per ReplaySession -> no cross-session contamination.
         self._bar_cache = {}
 
+        # incremental FOOTPRINT cache, keyed by tf_sec. Same no-lookahead /
+        # incremental discipline as _bar_cache: each committed bucket holds a
+        # {price_tick -> [buy_vol, sell_vol]} map built from SIDE/PX/SZ on ticks
+        # [start:cursor] only. Only ever populated when the client has the
+        # footprint toggle ON and hits /api/footprint -> zero overhead when OFF.
+        self._fp_cache = {}
+
         # cumulative stats helpers
         self._csv_path = SESSIONS_DIR / f"session_{self.id}.csv"
         self._json_path = SESSIONS_DIR / f"session_{self.id}.json"
@@ -684,6 +691,85 @@ class ReplaySession:
                 bars = bars + [forming_bar]
             return bars
 
+    # ---- footprint building (no lookahead: ticks[start:cursor] only) ----
+    def _ensure_footprint(self, tf_sec):
+        """Bring the tf footprint cache up to `cursor`, processing only NEW ticks.
+
+        Mirrors _ensure_bars exactly (same bucket math) but aggregates per
+        (bucket, price_tick) buy/sell volume from SIDE. Committed buckets are
+        sealed into c['fp'][bucket] = {price_tick: [buy, sell]}; the forming
+        bucket lives in c['cur'] until a later tick rolls into a new bucket."""
+        c = self._fp_cache.get(tf_sec)
+        if c is None or c["built_to"] > self.cursor:
+            c = {"built_to": self.start_idx, "fp": {}, "order": [],
+                 "cur_bucket": None, "cur": None}
+            self._fp_cache[tf_sec] = c
+        lo = c["built_to"]; hi = self.cursor
+        if hi <= lo:
+            return c
+        ts = np.asarray(TS[lo:hi], dtype=np.int64)
+        px = np.asarray(PX[lo:hi], dtype=np.int64)
+        sz = np.asarray(SZ[lo:hi], dtype=np.int64)
+        sd = (np.asarray(SIDE[lo:hi], dtype=np.int64) if SIDE is not None
+              else np.zeros(hi - lo, dtype=np.int64))
+        et = pd.DatetimeIndex(pd.to_datetime(ts, utc=True)).tz_convert(ET)
+        sec = (et.hour * 3600 + et.minute * 60 + et.second).to_numpy().astype(np.int64)
+        base_norm = pd.Timestamp(self.session_start_ns, tz="UTC").tz_convert(ET).normalize()
+        day_off = (et.normalize() - base_norm).days.to_numpy().astype(np.int64)
+        synth = SYNTH_BASE + sec + day_off * 86400
+        bucket = ((synth // tf_sec) * tf_sec).astype(np.int64)
+        cur_bucket = c["cur_bucket"]; cur = c["cur"]
+        bk_l = bucket.tolist(); px_l = px.tolist(); sz_l = sz.tolist(); sd_l = sd.tolist()
+        for i in range(len(bk_l)):
+            b = bk_l[i]; p = px_l[i]; z = sz_l[i]; d = sd_l[i]
+            if cur_bucket is None or b != cur_bucket:
+                if cur_bucket is not None:
+                    c["fp"][cur_bucket] = cur; c["order"].append(cur_bucket)
+                cur_bucket = b; cur = {}
+            cell = cur.get(p)
+            if cell is None:
+                cell = [0, 0]; cur[p] = cell
+            if d > 0:
+                cell[0] += z
+            elif d < 0:
+                cell[1] += z
+        c["cur_bucket"] = cur_bucket; c["cur"] = cur
+        c["built_to"] = hi
+        return c
+
+    def _fp_bar_view(self, bucket, cells):
+        """Serialize one bucket's {price_tick:[buy,sell]} into a client cell list
+        with display prices, POC (max-total-volume level) and net delta."""
+        out = []
+        poc_p = None; poc_v = -1; delta = 0
+        for pt, (bv, sv) in cells.items():
+            tot = bv + sv
+            delta += bv - sv
+            if tot > poc_v:
+                poc_v = tot; poc_p = pt
+            out.append({"p": round(self.disp_px(pt), 2), "b": int(bv), "s": int(sv)})
+        out.sort(key=lambda x: x["p"])
+        return {"time": int(bucket),
+                "poc": None if poc_p is None else round(self.disp_px(poc_p), 2),
+                "delta": int(delta), "cells": out}
+
+    def build_footprint(self, tf_sec, from_synth=None, to_synth=None):
+        """Return footprint bars for buckets in [from_synth, to_synth] (inclusive),
+        including the still-forming bucket. Visible-range only: the client passes
+        the chart's visible time window so we never serialize the whole session."""
+        with self.lock:
+            c = self._ensure_footprint(tf_sec)
+            order = c["order"]
+            lo_i = 0 if from_synth is None else bisect.bisect_left(order, int(from_synth))
+            hi_i = len(order) if to_synth is None else bisect.bisect_right(order, int(to_synth))
+            out = [self._fp_bar_view(bk, c["fp"][bk]) for bk in order[lo_i:hi_i]]
+            if c["cur"] is not None and c["cur_bucket"] is not None:
+                fb = int(c["cur_bucket"])
+                if (from_synth is None or fb >= int(from_synth)) and \
+                   (to_synth is None or fb <= int(to_synth)):
+                    out.append(self._fp_bar_view(fb, c["cur"]))
+            return out
+
     # ---- snapshot for the client ----
     def snapshot(self):
         with self.lock:
@@ -862,6 +948,23 @@ def bars():
     since_v = None if since in (None, "", "null") else int(float(since))
     bars_ = s.build_bars(tf_sec, since_synth=since_v)
     return jsonify({"ok": True, "tf": tf, "bars": bars_, **s.snapshot()})
+
+
+@app.route("/api/footprint")
+def footprint():
+    s = _sess()
+    if s is None:
+        return jsonify({"ok": False, "err": "no session"})
+    if SIDE is None:
+        return jsonify({"ok": False, "err": "no side data"})
+    s.advance()
+    tf = request.args.get("tf", "5s")
+    tf_sec = 5 if tf == "5s" else 60
+    fr = request.args.get("from"); to = request.args.get("to")
+    fr_v = None if fr in (None, "", "null") else int(float(fr))
+    to_v = None if to in (None, "", "null") else int(float(to))
+    fp = s.build_footprint(tf_sec, from_synth=fr_v, to_synth=to_v)
+    return jsonify({"ok": True, "tf": tf, "fp": fp})
 
 
 @app.route("/api/control", methods=["POST"])

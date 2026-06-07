@@ -185,6 +185,7 @@ async function poll() {
     if (r.ok) {
       applyBars(r.bars || [], lastBarTime === null);
       renderState(r);
+      if (fpOn) fetchFootprint();
       if (r.ended && !ended) onEnded();
     }
   } catch (e) { /* transient */ }
@@ -229,7 +230,9 @@ document.querySelectorAll(".tf").forEach((b) => b.onclick = async () => {
   document.querySelectorAll(".tf").forEach((x) => x.classList.remove("active"));
   b.classList.add("active");
   TF = b.dataset.tf; tfSec = TF === "5s" ? 5 : 60;
+  fpData = []; if (fpOn && fpCtx) fpCtx.clearRect(0, 0, fpW, fpH);
   await fullReload();
+  if (fpOn) fetchFootprint();
 });
 
 // ── bracket tick persistence ───────────────────────────────────────────────────
@@ -345,8 +348,143 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "9") { e.preventDefault(); $("#btnClose").click(); }
 });
 
+// ── footprint overlay ─────────────────────────────────────────────────────────
+// Per-bar buy×sell volume by price level, drawn on a canvas aligned to the
+// lightweight-charts bars. Default OFF (persisted). Zero overhead when off:
+// no fetch, no draw, canvas hidden. Cells render only when zoomed in enough to
+// be readable; otherwise just the per-bar delta + a POC marker show.
+const FP_KEY = "replay_trader.footprint";
+let fpOn = false;
+let fpData = [];            // last fetched array of {time, poc, delta, cells:[{p,b,s}]}
+let fpFetching = false;
+const fpcv = $("#fpcanvas");
+let fpCtx = null, fpW = 0, fpH = 0;
+
+function fpResize() {
+  const wrap = $("#chartwrap");
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+  fpcv.width = Math.round(w * dpr); fpcv.height = Math.round(h * dpr);
+  fpcv.style.width = w + "px"; fpcv.style.height = h + "px";
+  fpCtx = fpcv.getContext("2d");
+  fpCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  fpW = w; fpH = h;
+}
+
+async function fetchFootprint() {
+  if (!fpOn || !haveSession || fpFetching) return;
+  const vr = chart.timeScale().getVisibleRange();
+  if (!vr) return;
+  fpFetching = true;
+  try {
+    const from = Math.floor(vr.from) - tfSec * 2;
+    const to = Math.ceil(vr.to) + tfSec * 2;
+    const r = await api(`/api/footprint?tf=${TF}&from=${from}&to=${to}`);
+    if (r.ok) { fpData = r.fp || []; drawFootprint(); }
+  } catch (e) { /* transient */ }
+  fpFetching = false;
+}
+
+function _median(a) {
+  const v = a.filter((x) => isFinite(x)).sort((x, y) => x - y);
+  return v.length ? v[v.length >> 1] : NaN;
+}
+
+function drawFootprint() {
+  if (!fpOn || !fpCtx) return;
+  fpCtx.clearRect(0, 0, fpW, fpH);
+  if (!fpData.length) return;
+  const ts = chart.timeScale();
+  const xs = fpData.map((b) => ts.timeToCoordinate(b.time));
+  // bar pixel width from consecutive on-screen bar centers (fallback barSpacing)
+  const gaps = [];
+  for (let i = 1; i < xs.length; i++)
+    if (xs[i] != null && xs[i - 1] != null) gaps.push(xs[i] - xs[i - 1]);
+  let cellW = _median(gaps);
+  if (!isFinite(cellW) || cellW <= 0) cellW = (ts.options().barSpacing || 8);
+  // pixels per 0.25-tick price level (probe off the first bar's POC/first cell)
+  let ppt = 0;
+  const probe = fpData.find((b) => b.cells && b.cells.length);
+  if (probe) {
+    const pp = probe.cells[0].p;
+    const y0 = candle.priceToCoordinate(pp), y1 = candle.priceToCoordinate(pp + 0.25);
+    if (y0 != null && y1 != null) ppt = Math.abs(y0 - y1);
+  }
+  const drawCells = cellW >= 30 && ppt >= 8;
+  const fs = Math.max(8, Math.min(11, Math.floor(ppt) - 2));
+  fpCtx.font = `${fs}px ui-monospace,Menlo,Consolas,monospace`;
+  const half = cellW / 2;
+
+  for (const b of fpData) {
+    const x = ts.timeToCoordinate(b.time);
+    if (x == null) continue;
+    if (drawCells && b.cells && b.cells.length) {
+      const m = {};
+      for (const c of b.cells) m[c.p.toFixed(2)] = c;
+      for (const c of b.cells) {
+        const y = candle.priceToCoordinate(c.p);
+        if (y == null) continue;
+        const top = y - ppt / 2;
+        // POC row highlight
+        if (b.poc != null && Math.abs(c.p - b.poc) < 1e-6) {
+          fpCtx.fillStyle = "rgba(255,255,255,.10)";
+          fpCtx.fillRect(x - half, top, cellW, ppt);
+        }
+        // diagonal imbalance (>=3:1): buy[p] vs sell[p+tick]; sell[p] vs buy[p-tick]
+        const above = m[(c.p + 0.25).toFixed(2)];
+        const below = m[(c.p - 0.25).toFixed(2)];
+        if (c.b > 0 && above && above.s > 0 && c.b >= 3 * above.s) {
+          fpCtx.fillStyle = "rgba(38,166,154,.22)";
+          fpCtx.fillRect(x, top, half, ppt);
+        }
+        if (c.s > 0 && below && below.b > 0 && c.s >= 3 * below.b) {
+          fpCtx.fillStyle = "rgba(239,83,80,.22)";
+          fpCtx.fillRect(x - half, top, half, ppt);
+        }
+        fpCtx.textBaseline = "middle";
+        fpCtx.textAlign = "right"; fpCtx.fillStyle = "#ef5350";
+        fpCtx.fillText(c.s, x - 3, y);
+        fpCtx.textAlign = "left"; fpCtx.fillStyle = "#26a69a";
+        fpCtx.fillText(c.b, x + 3, y);
+      }
+    } else if (b.poc != null) {
+      // not zoomed enough for cells — just mark the POC level
+      const y = candle.priceToCoordinate(b.poc);
+      if (y != null) {
+        fpCtx.fillStyle = "rgba(227,209,75,.75)";
+        fpCtx.fillRect(x - Math.max(2, half * 0.6), y - 1, Math.max(4, cellW * 0.6), 2);
+      }
+    }
+    // per-bar delta under the bar (always, cheap)
+    fpCtx.textAlign = "center"; fpCtx.textBaseline = "bottom";
+    fpCtx.fillStyle = b.delta >= 0 ? "#26a69a" : "#ef5350";
+    fpCtx.fillText((b.delta > 0 ? "+" : "") + b.delta, x, fpH - 3);
+  }
+}
+
+function setFootprint(on) {
+  fpOn = on;
+  $("#btnFoot").classList.toggle("active", on);
+  fpcv.classList.toggle("hidden", !on);
+  try { localStorage.setItem(FP_KEY, on ? "1" : "0"); } catch (_) {}
+  if (on) { fpResize(); fetchFootprint(); }
+  else { fpData = []; if (fpCtx) fpCtx.clearRect(0, 0, fpW, fpH); }
+}
+$("#btnFoot").onclick = () => setFootprint(!fpOn);
+try { if (localStorage.getItem(FP_KEY) === "1") setFootprint(true); } catch (_) {}
+
+// redraw/refetch on pan & zoom so cells stay aligned and cover newly-shown bars
+let fpSched = null;
+function fpScheduleFetch() {
+  if (!fpOn) return;
+  if (fpSched) clearTimeout(fpSched);
+  fpSched = setTimeout(fetchFootprint, 70);
+}
+chart.timeScale().subscribeVisibleTimeRangeChange(() => { if (fpOn) drawFootprint(); fpScheduleFetch(); });
+chart.timeScale().subscribeVisibleLogicalRangeChange(() => { if (fpOn) drawFootprint(); fpScheduleFetch(); });
+
 // resize
-new ResizeObserver(() => chart.applyOptions({})).observe($("#chart"));
+new ResizeObserver(() => { chart.applyOptions({}); if (fpOn) { fpResize(); drawFootprint(); } }).observe($("#chart"));
 
 // ── main loop: poll the tape continuously ─────────────────────────────────────
 setInterval(poll, 140);

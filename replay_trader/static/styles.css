@@ -30,6 +30,8 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
 #main{display:flex;flex:1;min-height:0}
 #chartwrap{position:relative;flex:1;min-width:0;background:var(--bg)}
 #chart{position:absolute;inset:0}
+#fpcanvas{position:absolute;inset:0;z-index:4;pointer-events:none}
+#fpcanvas.hidden{display:none}
 .badge{position:absolute;top:10px;left:50%;transform:translateX(-50%);
   background:rgba(47,129,247,.15);border:1px solid var(--accent);color:#cfe3ff;
   padding:4px 12px;border-radius:20px;font-size:12px;pointer-events:none;z-index:5}
