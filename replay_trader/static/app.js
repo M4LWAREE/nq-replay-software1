@@ -172,6 +172,7 @@ function renderState(s) {
   renderFlow(s);
   renderHeat(s);
   renderVwap(s);
+  renderInstr(s);
   renderTrades(s);
 }
 
@@ -346,7 +347,9 @@ async function showSummary(r) {
 
 async function newSession() {
   const mode = "rth";
-  const r = await post("/api/new_session", { mode, slip_tk: 1 });
+  // Send the persisted instrument so the new session is created on the RIGHT
+  // contract from the first tick (no micro->mini reset, no timing race).
+  const r = await post("/api/new_session", { mode, slip_tk: 1, instrument: instrPref() });
   haveSession = true; ended = false; lastBarTime = null;
   await fullReload();
   renderState(r);
@@ -817,18 +820,30 @@ try { setVwap(localStorage.getItem(VWAP_KEY) === "1"); } catch (_) { setVwap(fal
 // = 1 mini). Lets you hold wider/longer for the same dollar risk. No new data.
 const INSTR_KEY = "replay_trader.instrument";
 const instrEl = $("#instrument");
+// Persisted instrument preference (sent to the server when a session is created).
+function instrPref() {
+  try { return localStorage.getItem(INSTR_KEY) || "mini"; } catch (_) { return "mini"; }
+}
+// Change the live session's instrument and persist the choice.
 async function instrApply() {
-  try { await post("/api/control", { action: "instrument", instrument: instrEl.value }); } catch (_) {}
+  try {
+    localStorage.setItem(INSTR_KEY, instrEl.value);
+  } catch (_) {}
+  try {
+    const r = await post("/api/control", { action: "instrument", instrument: instrEl.value });
+    renderState(r);   // reflect confirmed server state immediately
+  } catch (_) {}
+}
+// SERVER IS THE SOURCE OF TRUTH for the label: the dropdown always mirrors the
+// snapshot's instrument, so what the UI shows is exactly what the engine bills.
+function renderInstr(s) {
+  if (!instrEl || !s || !s.instrument) return;
+  if (instrEl.value !== s.instrument) instrEl.value = s.instrument;
+  try { localStorage.setItem(INSTR_KEY, s.instrument); } catch (_) {}
 }
 if (instrEl) {
-  try { const v = localStorage.getItem(INSTR_KEY); if (v) instrEl.value = v; } catch (_) {}
-  instrEl.addEventListener("change", () => {
-    try { localStorage.setItem(INSTR_KEY, instrEl.value); } catch (_) {}
-    instrApply();
-  });
-  setTimeout(instrApply, 800);                 // re-apply after the auto new_session on load
-  $("#btnNew").addEventListener("click", () => setTimeout(instrApply, 500));
-  $("#modalNew").addEventListener("click", () => setTimeout(instrApply, 500));
+  try { instrEl.value = instrPref(); } catch (_) {}   // optimistic until the first snapshot
+  instrEl.addEventListener("change", instrApply);
 }
 
 // ── bid / ask per-candle overlay ────────────────────────────────────────────

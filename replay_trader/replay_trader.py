@@ -55,9 +55,20 @@ SESSIONS_DIR.mkdir(exist_ok=True)
 INDEX_FILE = HERE / "session_index.json"
 
 TICK_SIZE = 0.25
-TICK_VALUE = 5.0           # $ per tick per contract (NQ)
-COMMISSION_RT = 4.20       # $ round-trip per contract
+TICK_VALUE = 5.0           # $ per tick per contract (NQ mini)
+COMMISSION_RT = 4.20       # $ round-trip per contract (NQ mini)
+MICRO_COMM_RT = 1.30       # $ round-trip per contract (MNQ micro — NOT COMMISSION_RT*0.1)
 DEFAULT_SLIP_TK = 1        # adverse slip ticks on market / stop fills
+
+
+def _instr_econ(instrument):
+    """Per-contract economics for an instrument label.
+    Returns (cmult, commission_round_turn): micro = MNQ ($0.50/tk, $1.30 RT);
+    mini = NQ ($5/tk, $4.20 RT). cmult scales TICK_VALUE; commission does NOT scale
+    (real MNQ RT is ~$1.30, not a tenth of the mini's $4.20)."""
+    if instrument == "micro":
+        return 0.1, MICRO_COMM_RT
+    return 1.0, COMMISSION_RT
 
 # FLOW LIGHT — trailing-60s signed order-flow delta (sum of side*size over the
 # last 60s of SEEN replay ticks). A permission read for Parag's discretion, NOT a
@@ -285,8 +296,8 @@ class ReplaySession:
         self.id = datetime.now().strftime("%Y%m%d_%H%M%S_") + secrets.token_hex(3)
         self.mode = mode
         self.slip_tk = int(slip_tk)
-        self.instrument = "mini"   # "mini" (NQ) or "micro" (MNQ)
-        self.cmult = 1.0           # micro = 0.1 (10 micros = 1 mini)
+        self.instrument = "mini"   # "mini" (NQ) or "micro" (MNQ); new_session may carry over
+        self.cmult, self.comm_rt = _instr_econ("mini")
 
         sess = secrets.choice(GOOD_SESSIONS)
         self._hidden_date = sess["date"]  # NEVER sent to client
@@ -514,6 +525,9 @@ class ReplaySession:
             "trail_tk": o.get("trail_tk"), "arm_tk": o.get("arm_tk") or 0,
             "trail_armed": False, "trail_stop": None,
             "mfe": 0, "mae": 0,
+            # LOCK economics at ENTRY: instrument/cmult/commission are snapshotted at
+            # fill so switching instrument mid-position can't retroactively rebill it.
+            "instrument": self.instrument, "cmult": self.cmult, "comm_rt": self.comm_rt,
             # FLOW LIGHT: trailing-60s signed delta AS OF the fill (tick i is
             # seen at fill -> hi-bound i+1). Logged ALWAYS, independent of the
             # client Flow toggle, since it is part of the science record.
@@ -576,15 +590,19 @@ class ReplaySession:
         name = "micro" if str(name).lower().startswith("micro") else "mini"
         with self.lock:
             self.instrument = name
-            self.cmult = 0.1 if name == "micro" else 1.0
+            self.cmult, self.comm_rt = _instr_econ(name)
         return {"instrument": self.instrument}
 
     def _close(self, i, exit_px, ns, reason):
         pos = self.position; self.position = None
         side = pos["side"]; size = pos["size"]
+        # economics locked at entry (fall back to live values for legacy positions)
+        cm = pos.get("cmult", self.cmult)
+        comm = pos.get("comm_rt", self.comm_rt)
+        instr = pos.get("instrument", self.instrument)
         pnl_ticks = (exit_px - pos["entry_px"]) * side
-        gross = pnl_ticks * TICK_VALUE * self.cmult * size
-        net = gross - COMMISSION_RT * self.cmult * size
+        gross = pnl_ticks * TICK_VALUE * cm * size
+        net = gross - comm * size
         hold_s = (ns - pos["entry_ns"]) / 1e9
         coin = self._coinflip_ev(pos, i)
         # random-time DAY baseline: same bracket at random RTH times, held the
@@ -605,7 +623,7 @@ class ReplaySession:
             "trail_tk": pos.get("trail_tk"), "arm_tk": pos.get("arm_tk"),
             "coinflip_ev_net": round(coin, 2),
             "random_time_ev_net": round(rt, 2),
-            "instrument": self.instrument,
+            "instrument": instr,
             "flow_delta_entry": pos.get("flow_delta_entry"),
         }
         self.trades.append(tr)
@@ -627,8 +645,8 @@ class ReplaySession:
                             pos.get("stop_tk"), pos["size"], self.slip_tk,
                             trail_tk=pos.get("trail_tk"),
                             arm_tk=pos.get("arm_tk") or 0,
-                            tick_value=TICK_VALUE * self.cmult,
-                            commission=COMMISSION_RT * self.cmult)
+                            tick_value=TICK_VALUE * pos.get("cmult", self.cmult),
+                            commission=pos.get("comm_rt", self.comm_rt))
 
     def _random_time_ev(self, pos, hi_idx):
         """Random-time DAY baseline: the SAME bracket (this trade's tdist/sdist/
@@ -666,8 +684,8 @@ class ReplaySession:
             path = np.asarray(PX[ridx:wend + 1], dtype=np.int64)
             evs.append(coin_ev_path(path, int(PX[ridx]), tdist, sdist, size, slip,
                                     trail_tk=trail_tk, arm_tk=arm_tk,
-                                    tick_value=TICK_VALUE * self.cmult,
-                                    commission=COMMISSION_RT * self.cmult))
+                                    tick_value=TICK_VALUE * pos.get("cmult", self.cmult),
+                                    commission=pos.get("comm_rt", self.comm_rt)))
         return float(np.mean(evs))
 
     def _end_session(self):
@@ -1074,7 +1092,7 @@ class ReplaySession:
             if self.position is not None:
                 p = self.position
                 pnl_ticks = (cur - p["entry_px"]) * p["side"]
-                open_pnl = round(pnl_ticks * TICK_VALUE * self.cmult * p["size"], 2)
+                open_pnl = round(pnl_ticks * TICK_VALUE * p.get("cmult", self.cmult) * p["size"], 2)
                 trail_disp = (None if not p.get("trail_armed") or p.get("trail_stop") is None
                               else round(self.disp_px(p["trail_stop"]), 2))
                 pos_view = {
@@ -1258,8 +1276,16 @@ def new_session():
                 prev._maybe_post_discord()
             except Exception:
                 pass
-        STATE["session"] = ReplaySession(mode=mode, slip_tk=slip)
-        s = STATE["session"]
+        s = ReplaySession(mode=mode, slip_tk=slip)
+        # Instrument continuity: an explicit body param wins; otherwise carry the
+        # PREVIOUS session's choice forward. Guarantees a new session never silently
+        # resets micro->mini, so what the UI shows is always what the engine bills.
+        instr = body.get("instrument")
+        if instr is None and prev is not None:
+            instr = prev.instrument
+        if instr:
+            s.set_instrument(instr)
+        STATE["session"] = s
     return jsonify({"ok": True, **s.snapshot()})
 
 
