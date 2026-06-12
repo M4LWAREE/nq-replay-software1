@@ -111,6 +111,7 @@ const PANE_TPL = `
     <label class="vpck"><input class="vpVAband" type="checkbox"/> Value-area shading</label>
     <label class="vpck"><input class="vpSplit" type="checkbox"/> Buy / sell split</label>
     <label class="vpck"><input class="vpShowPoc" type="checkbox" checked/> POC line</label>
+    <label class="vpck vpPrevRow" title="Previous RTH day's full profile (muted steel) + its POC/VAH/VAL as dashed level lines across the chart"><input class="vpPrev" type="checkbox"/> Prev session</label>
   </div>
 </div>`;
 
@@ -254,6 +255,8 @@ function makePane(idx, host, defaults) {
     candle.setData([]); vol.setData([]);
     p.fpData = []; if (fpCtx) fpCtx.clearRect(0, 0, fpW, fpH);
     p.vpData = null; if (vpCtx) vpCtx.clearRect(0, 0, vpW, vpH);
+    // new session = new hidden day -> prev-day profile & availability change
+    p.vpPrevData = null; p.vpPrevAvail = null;
     p.baBars = []; if (baCtx) baCtx.clearRect(0, 0, baW, baH);
   };
 
@@ -544,7 +547,8 @@ function makePane(idx, host, defaults) {
   function vpResize() { const s = sizeCanvas(vpcv); vpCtx = s.ctx; vpW = s.w; vpH = s.h; }
 
   const vpCfg = store.json(KEY("vpcfg"), { mode: "rolling", rollMin: 30, rows: 48,
-    va: 70, width: 24, opacity: 80, side: "left", band: false, split: false, poc: true });
+    va: 70, width: 24, opacity: 80, side: "left", band: false, split: false, poc: true,
+    prev: false });
   function vpLoadCfg() {
     q(".vpMode").value = vpCfg.mode; q(".vpRollMin").value = vpCfg.rollMin;
     q(".vpRows").value = vpCfg.rows; q(".vpVA").value = vpCfg.va;
@@ -552,6 +556,7 @@ function makePane(idx, host, defaults) {
     q(".vpSide").value = vpCfg.side;
     q(".vpVAband").checked = vpCfg.band; q(".vpSplit").checked = vpCfg.split;
     q(".vpShowPoc").checked = vpCfg.poc;
+    q(".vpPrev").checked = vpCfg.prev;
   }
   function vpSaveCfg() {
     vpCfg.mode = q(".vpMode").value;
@@ -564,8 +569,36 @@ function makePane(idx, host, defaults) {
     vpCfg.band = q(".vpVAband").checked;
     vpCfg.split = q(".vpSplit").checked;
     vpCfg.poc = q(".vpShowPoc").checked;
+    vpCfg.prev = q(".vpPrev").checked;
     store.set(KEY("vpcfg"), JSON.stringify(vpCfg));
   }
+
+  // ---- previous-session profile (prior-day value context) ----
+  // Static per session: fetched ONCE (per rows/va config), cached on the pane.
+  // p.vpPrevAvail: null = unknown, false = no previous day (option hidden),
+  // true = data cached. Reset on every new session.
+  p.vpPrevData = null;
+  p.vpPrevAvail = null;
+  p.vpPrevFetching = false;
+  p.vpPrevProbe = async () => {
+    if (!haveSession || p.vpPrevFetching) return;
+    if (p.vpPrevAvail === false || p.vpPrevData) return;
+    p.vpPrevFetching = true;
+    try {
+      const r = await api(`/api/volprofile_prev?rows=${vpCfg.rows}&va=${vpCfg.va}`);
+      if (r.ok) {
+        if (!r.available) {
+          p.vpPrevAvail = false;            // first day in the dataset
+        } else {
+          p.vpPrevAvail = true;
+          p.vpPrevData = r;
+        }
+        q(".vpPrevRow").classList.toggle("hidden", p.vpPrevAvail === false);
+        vpDraw();
+      }
+    } catch (e) { /* transient */ }
+    p.vpPrevFetching = false;
+  };
 
   p.vpFetch = async () => {
     if (!p.studies.vp || !haveSession || p.vpFetching) return;
@@ -582,6 +615,7 @@ function makePane(idx, host, defaults) {
       if (r.ok) { p.vpData = r; vpDraw(); }
     } catch (e) { /* transient */ }
     p.vpFetching = false;
+    if (vpCfg.prev) p.vpPrevProbe();   // one-shot: cached after first success
   };
 
   function vpDraw() {
@@ -611,6 +645,35 @@ function makePane(idx, host, defaults) {
         vpCtx.fillStyle = `rgba(44,127,255,${0.07 * op})`;
         vpCtx.fillRect(0, Math.min(yT, yB) - barH / 2, vpW, Math.abs(yB - yT) + barH);
       }
+    }
+    // previous session's profile FIRST (muted steel, behind today's blue) +
+    // its POC/VAH/VAL as dashed context levels across the whole chart
+    const pv = (vpCfg.prev && p.vpPrevData && p.vpPrevData.levels
+                && p.vpPrevData.levels.length) ? p.vpPrevData : null;
+    if (pv) {
+      const maxPV = pv.levels.reduce((m, x) => (x.v > m ? x.v : m), 0) || 1;
+      vpCtx.fillStyle = `rgba(150,158,166,${0.45 * op})`;
+      for (const lv of pv.levels) {
+        const y = candle.priceToCoordinate(lv.p);
+        if (y == null) continue;
+        const len = (lv.v / maxPV) * maxLen;
+        vpCtx.fillRect(anchorRight ? xEdge - len : xEdge, y - barH / 2, len, barH);
+      }
+      const line = (price, color, dash, label) => {
+        const y = candle.priceToCoordinate(price);
+        if (y == null) return;
+        vpCtx.strokeStyle = color; vpCtx.lineWidth = 1;
+        vpCtx.setLineDash(dash);
+        vpCtx.beginPath(); vpCtx.moveTo(0, y); vpCtx.lineTo(vpW, y); vpCtx.stroke();
+        vpCtx.setLineDash([]);
+        vpCtx.font = "9px ui-monospace,Menlo,Consolas,monospace";
+        vpCtx.textAlign = "right"; vpCtx.textBaseline = "bottom";
+        vpCtx.fillStyle = color;
+        vpCtx.fillText(label, vpW - axisPad - 4, y - 2);
+      };
+      if (pv.poc != null) line(pv.poc, `rgba(241,177,0,${Math.min(1, op + 0.1)})`, [6, 5], "pPOC");
+      if (pv.vah != null) line(pv.vah, `rgba(150,158,166,${0.55 * op})`, [4, 4], "pVAH");
+      if (pv.val != null) line(pv.val, `rgba(150,158,166,${0.55 * op})`, [4, 4], "pVAL");
     }
     for (const lv of L) {
       const y = candle.priceToCoordinate(lv.p);
@@ -757,7 +820,7 @@ function makePane(idx, host, defaults) {
       else { p.fpData = []; if (fpCtx) fpCtx.clearRect(0, 0, fpW, fpH); }
     } else if (k === "vp") {
       vpcv.classList.toggle("hidden", !on);
-      if (on) { vpResize(); p.vpFetch(); }
+      if (on) { vpResize(); p.vpFetch(); if (vpCfg.prev) p.vpPrevProbe(); }
       else { p.vpData = null; if (vpCtx) vpCtx.clearRect(0, 0, vpW, vpH); }
     } else if (k === "ba") {
       bacv.classList.toggle("hidden", !on);
@@ -783,13 +846,21 @@ function makePane(idx, host, defaults) {
     if (!host.querySelector(".studies-wrap").contains(e.target)) stMenu.classList.add("hidden");
   });
 
-  // vp config popup
-  q(".st-vpcfg").onclick = (e) => { e.stopPropagation(); q(".vpcfg").classList.toggle("hidden"); };
+  // vp config popup (opening it probes prev-day availability so the option
+  // hides gracefully on the dataset's first day)
+  q(".st-vpcfg").onclick = (e) => {
+    e.stopPropagation();
+    q(".vpcfg").classList.toggle("hidden");
+    p.vpPrevProbe();
+  };
   ["vpMode", "vpRollMin", "vpRows", "vpVA", "vpWidth", "vpOpacity", "vpSide",
-   "vpVAband", "vpSplit", "vpShowPoc"].forEach((cls) => {
+   "vpVAband", "vpSplit", "vpShowPoc", "vpPrev"].forEach((cls) => {
     const el = q("." + cls); if (!el) return;
     el.addEventListener("change", () => {
       vpSaveCfg();
+      // rows/va re-bin the prev profile too — drop the cache so it refetches
+      if (["vpRows", "vpVA"].includes(cls)) p.vpPrevData = null;
+      if (cls === "vpPrev" && vpCfg.prev) p.vpPrevProbe();
       if (["vpRows", "vpVA", "vpMode", "vpRollMin"].includes(cls)) p.vpFetch(); else vpDraw();
     });
   });

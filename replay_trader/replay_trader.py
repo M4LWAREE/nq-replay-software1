@@ -301,6 +301,54 @@ def coin_ev_path(path, entry_tick, tdist, sdist, size, slip, trail_tk=None, arm_
     return 0.5 * (outs[0] + outs[1])
 
 
+def _profile_stats(levels, rows, va_pct):
+    """Shared volume-profile maths: optional row-binning + POC + value area.
+    `levels` = [{"p","b","s","v"}, ...] sorted by price ascending; NOT mutated
+    (the prev-day cache passes its long-lived list through here)."""
+    prices = [lv["p"] for lv in levels]
+    # optional binning into `rows` even price buckets for a cleaner profile
+    if rows and rows > 0 and len(levels) > rows:
+        lo = prices[0]
+        hi = prices[-1]
+        span = hi - lo
+        bin_sz = span / rows if span > 0 else TICK_SIZE
+        binned = {}
+        for lv in levels:
+            k = int((lv["p"] - lo) / bin_sz) if bin_sz > 0 else 0
+            if k >= rows:
+                k = rows - 1
+            d = binned.setdefault(k, {"b": 0, "s": 0, "v": 0})
+            d["b"] += lv["b"]
+            d["s"] += lv["s"]
+            d["v"] += lv["v"]
+        levels = []
+        for k in sorted(binned):
+            d = binned[k]
+            levels.append({"p": round(lo + (k + 0.5) * bin_sz, 2),
+                           "b": d["b"], "s": d["s"], "v": d["v"]})
+    total = sum(lv["v"] for lv in levels)
+    poc_i = max(range(len(levels)), key=lambda i: levels[i]["v"])
+    poc = levels[poc_i]["p"]
+    # value area: expand around the POC, always taking the heavier neighbor,
+    # until cumulative volume reaches va_pct of the total.
+    target = total * (va_pct / 100.0)
+    lo_i = hi_i = poc_i
+    acc = levels[poc_i]["v"]
+    while acc < target and (lo_i > 0 or hi_i < len(levels) - 1):
+        up = levels[hi_i + 1]["v"] if hi_i < len(levels) - 1 else -1
+        dn = levels[lo_i - 1]["v"] if lo_i > 0 else -1
+        if up >= dn:
+            hi_i += 1
+            acc += max(up, 0)
+        else:
+            lo_i -= 1
+            acc += max(dn, 0)
+    val = levels[lo_i]["p"]
+    vah = levels[hi_i]["p"]
+    return {"levels": levels, "poc": poc, "vah": vah, "val": val,
+            "total": total, "price_hi": prices[-1], "price_lo": prices[0]}
+
+
 # ── the replay session ───────────────────────────────────────────────────────
 class ReplaySession:
     """Server-authoritative replay state. One active session at a time.
@@ -326,6 +374,21 @@ class ReplaySession:
             self.start_idx = int(sess["full_start"]); self.end_idx = int(sess["full_end"])
         else:
             self.start_idx = int(sess["rth_start"]); self.end_idx = int(sess["rth_end"])
+
+        # PREVIOUS RTH day's tick window (prior-day value context for the
+        # volume profile). Resolved by position in the date-sorted index so
+        # only the window INDICES are kept — the prev date itself is never
+        # stored or sent (blinding holds; profile prices get the same display
+        # offset as everything else). None on the dataset's first day.
+        self._prev_win = None
+        di = next((i for i, x in enumerate(ALL_SESSIONS)
+                   if x["date"] == sess["date"]), None)
+        if di is not None and di > 0:
+            prv = ALL_SESSIONS[di - 1]
+            a, b = int(prv["rth_start"]), int(prv["rth_end"])
+            if b > a:
+                self._prev_win = (a, b)
+        self._prev_levels = None    # lazy native-resolution profile cache
 
         # blinding price offset (integer ticks). Keeps prices positive & plausible.
         self.px_offset = int(secrets.randbelow(16001) - 8000)  # +-2000 points
@@ -1201,47 +1264,43 @@ class ReplaySession:
                     "total": 0, "price_hi": None, "price_lo": None}
         levels = [{"p": p, "b": buy.get(p, 0), "s": sell.get(p, 0),
                    "v": buy.get(p, 0) + sell.get(p, 0)} for p in prices]
-        # optional binning into `rows` even price buckets for a cleaner profile
-        if rows and rows > 0 and len(levels) > rows:
-            lo = prices[0]
-            hi = prices[-1]
-            span = hi - lo
-            bin_sz = span / rows if span > 0 else TICK_SIZE
-            binned = {}
-            for lv in levels:
-                k = int((lv["p"] - lo) / bin_sz) if bin_sz > 0 else 0
-                if k >= rows:
-                    k = rows - 1
-                d = binned.setdefault(k, {"b": 0, "s": 0, "v": 0})
-                d["b"] += lv["b"]
-                d["s"] += lv["s"]
-                d["v"] += lv["v"]
-            levels = []
-            for k in sorted(binned):
-                d = binned[k]
-                levels.append({"p": round(lo + (k + 0.5) * bin_sz, 2),
-                               "b": d["b"], "s": d["s"], "v": d["v"]})
-        total = sum(lv["v"] for lv in levels)
-        poc_i = max(range(len(levels)), key=lambda i: levels[i]["v"])
-        poc = levels[poc_i]["p"]
-        # value area: expand around the POC, always taking the heavier neighbor,
-        # until cumulative volume reaches va_pct of the total.
-        target = total * (va_pct / 100.0)
-        lo_i = hi_i = poc_i
-        acc = levels[poc_i]["v"]
-        while acc < target and (lo_i > 0 or hi_i < len(levels) - 1):
-            up = levels[hi_i + 1]["v"] if hi_i < len(levels) - 1 else -1
-            dn = levels[lo_i - 1]["v"] if lo_i > 0 else -1
-            if up >= dn:
-                hi_i += 1
-                acc += max(up, 0)
-            else:
-                lo_i -= 1
-                acc += max(dn, 0)
-        val = levels[lo_i]["p"]
-        vah = levels[hi_i]["p"]
-        return {"levels": levels, "poc": poc, "vah": vah, "val": val,
-                "total": total, "price_hi": prices[-1], "price_lo": prices[0]}
+        return _profile_stats(levels, rows, va_pct)
+
+    # ---- previous-session profile (prior-day value context) ----
+    def _prev_profile_levels(self):
+        """Native per-0.25 levels for the PREVIOUS RTH day (display prices,
+        offset applied). Built once, lazily, from the prior day's full tape —
+        static for the session's lifetime. None when there is no previous day.
+        Vectorized: three bincounts over ~one day of ticks."""
+        if self._prev_win is None:
+            return None
+        if self._prev_levels is None:
+            a, b = self._prev_win
+            px = np.asarray(PX[a:b], dtype=np.int64)
+            sz = np.asarray(SZ[a:b], dtype=np.int64)
+            sd = (np.asarray(SIDE[a:b], dtype=np.int64) if SIDE is not None
+                  else np.zeros(b - a, dtype=np.int64))
+            lo = int(px.min())
+            n = int(px.max()) - lo + 1
+            idx = px - lo
+            tot = np.bincount(idx, weights=sz, minlength=n)
+            buy = np.bincount(idx[sd > 0], weights=sz[sd > 0], minlength=n)
+            sell = np.bincount(idx[sd < 0], weights=sz[sd < 0], minlength=n)
+            self._prev_levels = [
+                {"p": round(self.disp_px(lo + int(k)), 2),
+                 "b": int(buy[k]), "s": int(sell[k]), "v": int(tot[k])}
+                for k in np.nonzero(tot)[0]
+            ]
+        return self._prev_levels
+
+    def build_prev_profile(self, rows=0, va_pct=70.0):
+        """Previous RTH day's profile + POC/VAH/VAL. {'available': False} on
+        the dataset's first day. No date fields — blinding holds."""
+        with self.lock:
+            lv = self._prev_profile_levels()
+            if lv is None or not lv:
+                return {"available": False}
+            return {"available": True, **_profile_stats(lv, rows, va_pct)}
 
     # ---- snapshot for the client ----
     def snapshot(self, flow=False, heat=False, vwap=False):
@@ -1548,6 +1607,19 @@ def volprofile():
     vp = s.build_volume_profile(tf_sec, from_synth=fr_v, to_synth=to_v,
                                 rows=rows, va_pct=va)
     return jsonify({"ok": True, "tf": tf, **vp})
+
+
+@app.route("/api/volprofile_prev")
+def volprofile_prev():
+    """Previous RTH day's full profile (static per session — the client
+    fetches it once). available:false when the replay day is the dataset's
+    first day. Carries no date information."""
+    s = _sess()
+    if s is None:
+        return jsonify({"ok": False, "err": "no session"})
+    rows = int(float(request.args.get("rows", 0) or 0))
+    va = float(request.args.get("va", 70) or 70)
+    return jsonify({"ok": True, **s.build_prev_profile(rows=rows, va_pct=va)})
 
 
 @app.route("/api/control", methods=["POST"])

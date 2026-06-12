@@ -45,7 +45,10 @@ Volumetrica-style T.Panel (qty in micros by default).
 - **Studies (per pane)**: **Footprint** (buy/sell heat cells by price, magenta
   POC, gold imbalance numbers, thin skeleton candles), **Vol Profile**
   (Volumetrica-style left-edge profile; visible / rolling-30min /
-  whole-session range; gold POC line), **Bid/Ask** ladder, **VWAP + bands**
+  whole-session range; gold POC line; optional **Prev session** overlay — the
+  prior RTH day's full profile in muted steel with its pPOC/pVAH/pVAL drawn as
+  dashed context levels across the chart, same blinding offset, hidden when
+  the replay day is the dataset's first), **Bid/Ask** ladder, **VWAP + bands**
   (session VWAP from 09:30 with dotted ±1σ/±2σ bands), **Delta candles**
   (green = positive bar delta, purple = negative), **Delta 1m** (1-minute
   volume-delta histogram panel). All off-states are zero-overhead.
