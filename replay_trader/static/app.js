@@ -1041,6 +1041,60 @@ function renderState(s) {
   renderFlow(s);
   renderHeat(s);
   renderInstr(s);
+  renderChallenge(s);
+}
+
+// ── prop challenge HUD + banner ───────────────────────────────────────────────
+// Server-authoritative: the engine marks equity on every print, trails/locks
+// the MLL, flattens on a touch and freezes a pass — the client only displays.
+const moneyK = (v) => (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString("en-US",
+  { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+let chLastBannerKey = null;
+function renderChallenge(s) {
+  const hud = $("#chud"), banner = $("#chbanner");
+  const c = s ? s.challenge : null;
+  if (!c || !c.on) {
+    hud.classList.add("hidden"); banner.classList.add("hidden");
+    chLastBannerKey = null;
+    return;
+  }
+  hud.classList.remove("hidden");
+  const st = $("#chStatus");
+  st.textContent = c.status === "passed" ? "PASSED ✓"
+    : c.status === "failed" ? "FAILED" : "CHALLENGE";
+  st.className = "ch-chip " + c.status;
+  $("#chBal").textContent = moneyK(c.balance);
+  $("#chEq").textContent = moneyK(c.equity);
+  $("#chMll").textContent = moneyK(c.mll_level);
+  const dm = $("#chDistMll");
+  dm.textContent = moneyK(c.dist_mll);
+  dm.className = "val " + (c.dist_mll < 200 ? "ch-red" : c.dist_mll < 500 ? "ch-amber" : "");
+  $("#chDistTgt").textContent = c.status === "passed" ? "reached ✓" : moneyK(Math.max(0, c.dist_target));
+  $("#chLock").textContent = c.locked ? "MLL locked" : "MLL trailing";
+  // status banner (only re-render on change — no flicker)
+  const key = c.status;
+  if (key !== chLastBannerKey) {
+    chLastBannerKey = key;
+    if (c.status === "failed") {
+      banner.className = "chbanner fail";
+      banner.textContent = `CHALLENGE FAILED — MLL hit @ ${c.failed_at || "—"} · flattened · entries blocked`;
+    } else if (c.status === "passed") {
+      banner.className = "chbanner pass";
+      banner.textContent = `CHALLENGE PASSED ✓ ${moneyK(c.target_balance)} reached @ ${c.passed_at || "—"}`;
+    } else {
+      banner.className = "chbanner hidden";
+    }
+  }
+}
+
+// transient toast for order rejections (size cap / entries blocked)
+let toastT = null;
+function toast(msg) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  if (toastT) clearTimeout(toastT);
+  toastT = setTimeout(() => el.classList.add("hidden"), 2800);
 }
 
 // ── poll loop ─────────────────────────────────────────────────────────────────
@@ -1133,6 +1187,7 @@ async function doOrder(side) {
   const arm_tk = $("#arm").value === "" ? null : +$("#arm").value;
   saveBrackets();
   const r = await post("/api/order", { side, size, stop_tk, target_tk, trail_tk, arm_tk });
+  if (r && r.ok === false && r.err) toast(r.err);   // surface challenge gates etc.
   flowFlash();           // brief acknowledgment tint — never blocks the trade
   renderState(r); poll();
 }
@@ -1148,6 +1203,22 @@ $("#btnApply").onclick = async () => {
   const r = await post("/api/modify", { stop_tk, target_tk, trail_tk, arm_tk });
   renderState(r);
 };
+
+// prop challenge preference — applies to the NEXT session (one session = one
+// attempt; the engine is server-side, this only opts the next attempt in)
+const CHAL_KEY = "replay_trader.challenge";
+function challengePref() { return store.get(CHAL_KEY, "0") === "1"; }
+function setChallengePref(on) {
+  store.set(CHAL_KEY, on ? "1" : "0");
+  $("#btnChallenge").classList.toggle("active", on);
+}
+$("#btnChallenge").onclick = () => {
+  const on = !challengePref();
+  setChallengePref(on);
+  toast(on ? "Prop Challenge armed — starts with the next session"
+           : "Prop Challenge off for the next session");
+};
+setChallengePref(challengePref());
 
 $("#btnNew").onclick = () => newSession();
 $("#modalNew").onclick = () => { $("#overlay").classList.add("hidden"); newSession(); };
@@ -1190,7 +1261,8 @@ async function newSession() {
   const mode = "rth";
   // Send the persisted instrument so the new session is created on the RIGHT
   // contract from the first tick (no micro->mini reset, no timing race).
-  const r = await post("/api/new_session", { mode, slip_tk: 1, instrument: instrPref() });
+  const r = await post("/api/new_session", { mode, slip_tk: 1, instrument: instrPref(),
+    challenge: challengePref() });
   haveSession = true; ended = false;
   // hidden panes get a hard reset (no fetch) so stale bar times from the old
   // session can never poison the tape when the pane is shown again

@@ -35,6 +35,33 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
 .ctl.danger{border-color:var(--red);color:#ff8d96}
 .ctl.wide{width:100%}
 
+/* ── prop challenge HUD strip + banner + toast ────────────────────────────── */
+.chud{display:flex;align-items:center;gap:18px;padding:4px 12px;
+  background:#161616;border-bottom:1px solid #000;font-size:12px}
+.chud.hidden{display:none}
+.ch-item{display:inline-flex;align-items:baseline;gap:6px}
+.chud .val{min-width:auto;font-weight:700}
+.ch-chip{padding:2px 10px;border-radius:3px;font-size:10px;font-weight:800;
+  letter-spacing:1px}
+.ch-chip.active{background:rgba(44,127,255,.18);color:var(--blue);border:1px solid var(--blue)}
+.ch-chip.passed{background:rgba(0,211,1,.15);color:var(--green);border:1px solid var(--green)}
+.ch-chip.failed{background:rgba(255,0,26,.15);color:var(--red);border:1px solid var(--red)}
+.chud .ch-amber{color:var(--orange)}
+.chud .ch-red{color:var(--red);animation:chpulse 1s ease-in-out infinite}
+@keyframes chpulse{50%{opacity:.45}}
+.chbanner{position:absolute;top:84px;left:50%;transform:translateX(-50%);
+  padding:8px 22px;border-radius:6px;font-size:15px;font-weight:800;
+  letter-spacing:.5px;pointer-events:none;z-index:10;
+  box-shadow:0 6px 22px rgba(0,0,0,.55)}
+.chbanner.hidden{display:none}
+.chbanner.fail{background:rgba(120,0,12,.92);border:1px solid var(--red);color:#ffd7da}
+.chbanner.pass{background:rgba(0,90,2,.92);border:1px solid var(--green);color:#d8ffd6}
+.toast{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);
+  background:#262626;border:1px solid var(--orange);color:var(--fg);
+  padding:7px 16px;border-radius:6px;font-size:12px;font-weight:600;z-index:11;
+  pointer-events:none;box-shadow:0 6px 22px rgba(0,0,0,.55)}
+.toast.hidden{display:none}
+
 /* main split */
 #main{display:flex;flex:1;min-height:0}
 #panes{position:relative;display:flex;flex:1;min-width:0;background:var(--bg);gap:1px}

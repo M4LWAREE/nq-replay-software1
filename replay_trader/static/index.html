@@ -49,10 +49,23 @@
       </span>
     </div>
     <div class="grp right">
+      <button id="btnChallenge" class="ctl"
+              title="Prop Challenge mode (applies to the NEXT session): Topstep-style 50K combine — $50,000 start, $2,000 trailing MLL on real-time equity (locks at $50,100), $3,000 profit target, 5-mini/50-micro size cap, no consistency rule. MLL touch = flatten + entries blocked.">⚡ Challenge</button>
       <button id="btnNew" class="ctl alt">New Session</button>
       <button id="btnEnd" class="ctl danger">End &amp; Reveal</button>
     </div>
   </header>
+
+  <!-- prop-challenge HUD (visible only when the session is a challenge attempt) -->
+  <div id="chud" class="chud hidden">
+    <span class="ch-chip" id="chStatus">ACTIVE</span>
+    <span class="ch-item"><span class="lbl">Balance</span><span id="chBal" class="val">—</span></span>
+    <span class="ch-item"><span class="lbl">Equity</span><span id="chEq" class="val">—</span></span>
+    <span class="ch-item"><span class="lbl">MLL @</span><span id="chMll" class="val">—</span></span>
+    <span class="ch-item"><span class="lbl">To MLL</span><span id="chDistMll" class="val">—</span></span>
+    <span class="ch-item"><span class="lbl">To target</span><span id="chDistTgt" class="val">—</span></span>
+    <span class="ch-item muted" id="chLock"></span>
+  </div>
 
   <div id="main">
     <!-- chart panes. pane1 = LEFT context pane (15m footprint, hidden in single
@@ -62,6 +75,8 @@
       <div class="pane hidden" id="pane1"></div>
       <div class="pane" id="pane0"></div>
       <div id="paused-badge" class="badge">PAUSED — press Space / Play</div>
+      <div id="chbanner" class="chbanner hidden"></div>
+      <div id="toast" class="toast hidden"></div>
     </section>
 
     <!-- side panel -->

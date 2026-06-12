@@ -87,6 +87,27 @@ FLOW_THRESH = 50                  # contracts; |delta| >= this -> colored pill
 OPEN_HEAT_QUIET = 250             # < this tk -> GREEN "quiet — your tape"
 OPEN_HEAT_HOT = 400               # > this tk -> RED "heat protocol"; 250-400 AMBER
 
+# PROP CHALLENGE — Topstep-style 50K combine, per session, OFF by default.
+# One replay session = one challenge attempt. Classic ruleset (current firm
+# specs may have drifted — tune here, ONE place):
+#   • trailing Maximum Loss Limit: fail when EQUITY (balance + open P&L,
+#     marked on every print — real-time, Topstep-style) touches
+#     (equity high-water mark − mll); the level LOCKS once it reaches
+#     start_balance + mll_lock_offset and never trails further.
+#   • profit target: REALIZED balance >= start_balance + profit_target = PASSED
+#     (frozen — he may keep trading, the result never un-passes).
+#   • scaling cap: max position size per order (50K tier: 5 minis / 50 micros).
+#   • NO consistency rule (explicit request).
+# Fail = flatten at market through the normal honest fill path (adverse slip),
+# cancel pending, block further entries. All logging is additive-only.
+PROP_CHALLENGE = {
+    "start_balance": 50_000.0,
+    "mll": 2_000.0,              # trailing Maximum Loss Limit ($ below equity HWM)
+    "profit_target": 3_000.0,    # realized $ above start_balance -> PASSED
+    "mll_lock_offset": 100.0,    # MLL stops trailing at start_balance + this ($50,100)
+    "size_cap": {"mini": 5, "micro": 50},
+}
+
 # Neutral synthetic date so the x-axis shows real ET time-of-day but NO real date.
 SYNTH_BASE = 1577836800    # 2020-01-01 00:00:00 UTC (epoch seconds)
 
@@ -330,6 +351,10 @@ class ReplaySession:
         # trading state
         self.position = None        # dict or None
         self.pending = None         # market order awaiting next-print fill
+
+        # prop-challenge state (None unless enabled via enable_challenge)
+        self.challenge = False
+        self.ch = None
         self.next_order_id = 1
         self.trades = []            # closed trades (each a dict)
         self.events = []            # raw order/fill log rows
@@ -592,6 +617,11 @@ class ReplaySession:
             if eff is not None and px >= eff:
                 self._close(i, px + self.slip_tk, ns,
                             "TRAIL" if eff_is_trail else "STOP"); return
+        # prop challenge: REAL-TIME equity mark + MLL check on every surviving
+        # print (protective exits, being resting orders, resolve first; a
+        # closed trade is re-checked on the realized side in _ch_on_close)
+        if self.challenge:
+            self._ch_tick(i, px, ns)
 
     def set_instrument(self, name):
         name = "micro" if str(name).lower().startswith("micro") else "mini"
@@ -599,6 +629,113 @@ class ReplaySession:
             self.instrument = name
             self.cmult, self.comm_rt = _instr_econ(name)
         return {"instrument": self.instrument}
+
+    # ---- prop challenge (Topstep-style combine; see PROP_CHALLENGE) ----
+    def enable_challenge(self, on):
+        """Turn challenge mode on for THIS session (set once at session start)."""
+        with self.lock:
+            self.challenge = bool(on)
+            if self.challenge:
+                start = float(PROP_CHALLENGE["start_balance"])
+                self.ch = {
+                    "status": "active",         # active | passed | failed
+                    "balance": start,           # realized (net of commission)
+                    "hwm": start,               # equity high-water mark (incl. open P&L)
+                    "mll_level": start - float(PROP_CHALLENGE["mll"]),
+                    "locked": False,            # MLL reached start + lock_offset
+                    "peak_equity": start,
+                    "max_dd_used": 0.0,         # worst equity excursion below HWM
+                    "passed_at": None, "failed_at": None,
+                }
+                self._persist_json()            # attempt exists on disk from the start
+            else:
+                self.ch = None
+
+    def _ch_unreal(self, px):
+        """Open P&L in $ at integer-tick price px (gross, entry-locked econ)."""
+        pos = self.position
+        if pos is None:
+            return 0.0
+        return ((px - pos["entry_px"]) * pos["side"]
+                * TICK_VALUE * pos.get("cmult", self.cmult) * pos["size"])
+
+    def _ch_mark(self, px):
+        """Mark equity at px: trail the HWM/MLL (lock at start+offset), track
+        peak equity + max drawdown used. Returns equity in $."""
+        ch = self.ch
+        eq = ch["balance"] + self._ch_unreal(px)
+        if eq > ch["hwm"]:
+            ch["hwm"] = eq
+            ch["peak_equity"] = eq
+            cap = float(PROP_CHALLENGE["start_balance"]) + float(PROP_CHALLENGE["mll_lock_offset"])
+            lvl = ch["hwm"] - float(PROP_CHALLENGE["mll"])
+            if lvl >= cap:
+                lvl = cap
+                ch["locked"] = True
+            if lvl > ch["mll_level"]:
+                ch["mll_level"] = lvl       # ratchet only — never loosens
+        dd = ch["hwm"] - eq
+        if dd > ch["max_dd_used"]:
+            ch["max_dd_used"] = dd
+        return eq
+
+    def _ch_tick(self, i, px, ns):
+        """REAL-TIME MLL check on this print (Topstep-style: equity incl. open
+        P&L). Touch = FAILED: flatten at market through the honest fill path
+        (adverse slip), cancel pending, block further entries."""
+        if not self.challenge or self.ch is None:
+            return
+        if self.ch["status"] != "active":
+            self._ch_mark(px)               # keep peak/dd stats after pass/fail
+            return
+        eq = self._ch_mark(px)
+        if eq <= self.ch["mll_level"] + 1e-9:
+            self.ch["status"] = "failed"
+            self.ch["failed_at"] = self.et_clock(ns)
+            self.pending = None
+            if self.position is not None:
+                self._close(i, px - self.position["side"] * self.slip_tk, ns, "MLL")
+            self._persist_json()
+
+    def _ch_on_close(self, net, exit_px, ns):
+        """Realized accounting after a trade closes: balance, pass check
+        (frozen once reached), and the realized-side MLL check (a slipped exit
+        can land the realized balance at/under the level)."""
+        if not self.challenge or self.ch is None:
+            return
+        ch = self.ch
+        ch["balance"] += net
+        self._ch_mark(exit_px)              # flat now -> equity == balance
+        if ch["status"] != "active":
+            return
+        if ch["balance"] >= float(PROP_CHALLENGE["start_balance"]) + float(PROP_CHALLENGE["profit_target"]):
+            ch["status"] = "passed"
+            ch["passed_at"] = self.et_clock(ns)
+        elif ch["balance"] <= ch["mll_level"] + 1e-9:
+            ch["status"] = "failed"
+            ch["failed_at"] = self.et_clock(ns)
+            self.pending = None
+
+    def _ch_view(self, cur_px):
+        """Snapshot block for the client HUD."""
+        ch = self.ch
+        eq = ch["balance"] + self._ch_unreal(cur_px)
+        target_bal = float(PROP_CHALLENGE["start_balance"]) + float(PROP_CHALLENGE["profit_target"])
+        return {
+            "on": True, "status": ch["status"],
+            "balance": round(ch["balance"], 2),
+            "equity": round(eq, 2),
+            "mll_level": round(ch["mll_level"], 2),
+            "dist_mll": round(eq - ch["mll_level"], 2),
+            "target_balance": round(target_bal, 2),
+            "dist_target": round(target_bal - ch["balance"], 2),
+            "start_balance": float(PROP_CHALLENGE["start_balance"]),
+            "locked": ch["locked"],
+            "peak_equity": round(ch["peak_equity"], 2),
+            "max_dd_used": round(ch["max_dd_used"], 2),
+            "passed_at": ch["passed_at"], "failed_at": ch["failed_at"],
+            "size_cap": int(PROP_CHALLENGE["size_cap"].get(self.instrument, 5)),
+        }
 
     def _close(self, i, exit_px, ns, reason):
         pos = self.position; self.position = None
@@ -634,6 +771,7 @@ class ReplaySession:
             "flow_delta_entry": pos.get("flow_delta_entry"),
         }
         self.trades.append(tr)
+        self._ch_on_close(net, exit_px, ns)   # challenge: realized balance / pass / fail
         self._log_event("FILL_EXIT", side=side, size=size, px=exit_px, ns=ns, idx=i,
                         reason=reason, pnl_net=net)
         self._append_trade_csv(tr)
@@ -740,6 +878,14 @@ class ReplaySession:
             if self.position is not None or self.pending is not None:
                 return {"ok": False, "err": "one position at a time"}
             size = max(1, int(size))
+            # prop challenge gates: no entries after a fail; 50K scaling cap
+            if self.challenge and self.ch is not None:
+                if self.ch["status"] == "failed":
+                    return {"ok": False, "err": "challenge FAILED — entries blocked this session"}
+                cap = int(PROP_CHALLENGE["size_cap"].get(self.instrument, 5))
+                if size > cap:
+                    return {"ok": False,
+                            "err": f"challenge size cap: max {cap} {self.instrument}s per order"}
             # Brackets are TICK OFFSETS from the actual fill price; the absolute
             # stop/target prices are computed in _fill_market once we know the fill.
             stop_tk = self._norm_tk(stop_tk)
@@ -1137,6 +1283,8 @@ class ReplaySession:
                 "flow_thresh": FLOW_THRESH,
                 "open_heat_quiet": OPEN_HEAT_QUIET, "open_heat_hot": OPEN_HEAT_HOT,
             }
+            if self.challenge and self.ch is not None:
+                snap["challenge"] = self._ch_view(cur)
             # FLOW LIGHT readout — only when the client asks (toggle ON), so the
             # searchsorted+dot is skipped entirely when the study is OFF.
             if flow:
@@ -1235,6 +1383,22 @@ class ReplaySession:
         data = {"session_id": self.id, "mode": self.mode, "ended": self.ended,
                 "stats": st, "trades": self.trades,
                 "hidden_date_sha": secrets.token_hex(0)}  # date intentionally omitted
+        # prop challenge attempt result — ADDITIVE block, everything else as-is.
+        # (Kept out of the per-trade CSV: a summary row would break its schema
+        # and the downstream tradedb importer.)
+        if self.challenge and self.ch is not None:
+            result = {"active": ("INCOMPLETE" if self.ended else "ACTIVE"),
+                      "passed": "PASSED", "failed": "FAILED"}[self.ch["status"]]
+            data["challenge"] = {
+                "result": result,
+                "balance": round(self.ch["balance"], 2),
+                "peak_equity": round(self.ch["peak_equity"], 2),
+                "max_dd_used": round(self.ch["max_dd_used"], 2),
+                "mll_level": round(self.ch["mll_level"], 2),
+                "mll_locked": self.ch["locked"],
+                "passed_at": self.ch["passed_at"], "failed_at": self.ch["failed_at"],
+                "config": {k: v for k, v in PROP_CHALLENGE.items()},
+            }
         with open(self._json_path, "w") as f:
             json.dump(data, f, indent=2)
 
@@ -1300,6 +1464,10 @@ def new_session():
             instr = prev.instrument
         if instr:
             s.set_instrument(instr)
+        # prop challenge: per-session opt-in, OFF by default (client sends the
+        # persisted preference; one replay session = one challenge attempt)
+        if body.get("challenge"):
+            s.enable_challenge(True)
         STATE["session"] = s
     return jsonify({"ok": True, **s.snapshot()})
 

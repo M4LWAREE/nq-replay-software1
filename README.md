@@ -55,6 +55,18 @@ Volumetrica-style T.Panel (qty in micros by default).
   clean buckets (0.5 → 1pt → 2.5pt → 5pt …) whose numbers are the true sums
   of the merged levels. Bars, numbers, POC and 3:1 imbalance highlighting all
   use the same active bucket resolution; thousands abbreviate (1.2k).
+- **⚡ Challenge** arms Prop Challenge mode for the NEXT session (off by
+  default; one session = one attempt). Topstep-style 50K combine: $50,000
+  start, **$2,000 trailing MLL** marked in real time on equity including open
+  P&L (locks at $50,100), **$3,000 profit target** on realized balance,
+  5-mini / 50-micro size cap, **no consistency rule**. MLL touch = flatten at
+  market (honest fill) + entries blocked; target reached = PASSED (frozen —
+  keep trading if you want). Live HUD shows balance / equity / distance to MLL
+  (amber &lt;$500, red &lt;$200) / distance to target. The attempt result
+  (PASSED / FAILED / INCOMPLETE, peak equity, max drawdown used) is saved in
+  the session JSON. All rule numbers live in one `PROP_CHALLENGE` dict in
+  `replay_trader.py` — tune them to your firm's exact spec.
+  `replay_trader/verify_challenge.py` asserts the whole ruleset.
 - Every trade is logged to `replay_trader/sessions/session_*.csv` with honest
   P&L plus two controls per trade: `coinflip_ev_net` (a coin-flip at your
   moment) and `random_time_ev_net` (your bracket at random times). The JSON
