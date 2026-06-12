@@ -36,10 +36,12 @@ Volumetrica-style T.Panel (qty in micros by default).
   **Arm at +X (tk)** = trail activates once you are +X ticks in profit
   (0 = from entry). Adjustable mid-trade; never loosens once ratcheted.
 - **▯▯ Dual** toggles a second chart pane (defaults: 15m footprint on the left,
-  your main chart on the right). Both panes replay the SAME tape; scroll/zoom
-  either one and the other follows to the same time window, and the crosshair
-  mirrors across panes. Each pane has its own timeframe (5s/30s/1m/5m/15m) and
-  its own Studies menu.
+  your main chart on the right). Both panes replay the SAME tape and co-scroll
+  in TIME: scroll either one and the other follows to the same moment, and the
+  crosshair mirrors across panes. Each pane keeps its OWN zoom — interacting
+  with one pane never changes the other's bar spacing, and each pane's zoom is
+  persisted across reloads. Each pane has its own timeframe (5s/30s/1m/5m/15m)
+  and its own Studies menu.
 - **Studies (per pane)**: **Footprint** (buy/sell heat cells by price, magenta
   POC, gold imbalance numbers, thin skeleton candles), **Vol Profile**
   (Volumetrica-style left-edge profile; visible / rolling-30min /

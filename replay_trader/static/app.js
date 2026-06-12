@@ -835,6 +835,22 @@ function makePane(idx, host, defaults) {
         color: COL.gold, lineStyle: 2, lineWidth: 2, axisLabelVisible: true, title: "trail" }));
   };
 
+  // ---- per-pane zoom persistence ----
+  // The pane's barSpacing belongs to the USER: sync never rewrites it, and it
+  // survives reloads. Saved debounced on any logical-range change (zoom/scroll).
+  const savedZoom = parseFloat(store.get(KEY("zoom"), ""));
+  if (isFinite(savedZoom) && savedZoom > 0) {
+    try { chart.timeScale().applyOptions({ barSpacing: savedZoom }); } catch (_) {}
+  }
+  let zoomSaveT = null;
+  function saveZoom() {
+    if (zoomSaveT) clearTimeout(zoomSaveT);
+    zoomSaveT = setTimeout(() => {
+      const bs = chart.timeScale().options().barSpacing;
+      if (isFinite(bs) && bs > 0) store.set(KEY("zoom"), String(bs));
+    }, 300);
+  }
+
   // ---- redraw / refetch subscriptions + live study refresh ----
   chart.timeScale().subscribeVisibleTimeRangeChange(() => {
     if (p.studies.fp) { drawFootprint(); fpScheduleFetch(); }
@@ -842,6 +858,7 @@ function makePane(idx, host, defaults) {
     if (p.studies.ba) { baDraw(); baScheduleFetch(); }
   });
   chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    saveZoom();
     if (p.studies.fp) { drawFootprint(); fpScheduleFetch(); }
     if (p.studies.vp) { vpDraw(); vpScheduleFetch(); }
     if (p.studies.ba) { baDraw(); baScheduleFetch(); }
@@ -890,41 +907,49 @@ function setLayout(dual, persist = true) {
   $("#btnLayout").textContent = layoutDual ? "▯ Single" : "▯▯ Dual";
   if (persist) store.set(LAYOUT_KEY, layoutDual ? "dual" : "single");
   if (layoutDual && haveSession) {
-    // bring the context pane up to date, then snap it onto the main pane's window
+    // bring the context pane up to date, then co-scroll it to the main pane's
+    // moment — its own zoom (barSpacing) is left exactly as the user set it
     pane1.poll(false).then(() => {
-      const r = pane0.chart.timeScale().getVisibleRange();
-      if (r) try { applySyncRange(pane1, r); } catch (_) {}
+      try { alignTime(pane1, rightEdgeTime(pane0)); } catch (_) {}
     });
   }
 }
 $("#btnLayout").onclick = () => setLayout(!layoutDual);
 
-// ── pane sync: scroll/zoom one chart, the other follows the same TIME window;
-//    crosshair mirrors to the same time/price (snapped to the other pane's TF).
+// ── pane sync: TIME-ONLY co-scroll. Each pane owns its zoom (barSpacing) —
+//    sync NEVER rewrites it, it only scrolls the other pane so both look at
+//    the same moment (matching right-edge time). Zoom is persisted per pane.
+//    Crosshair mirrors to the same time/price (snapped to the other pane's TF).
 //    NOTE: setVisibleRange() is applied as a short animation that any series
 //    update() (the 140ms poll) cancels — it silently no-ops under a live tape.
-//    So the follower is driven via barSpacing + scrollToPosition(…, false),
-//    which apply immediately and survive data updates. Programmatic syncs are
-//    stamped so the follower's own range-change echo doesn't ping-pong back. ──
+//    scrollToPosition(…, false) applies immediately and survives data updates.
+//    Programmatic syncs are stamped so the follower's own scroll echo doesn't
+//    ping-pong back. ──
 let crossBusy = false;
-function applySyncRange(o, r) {
-  const sec = o.tfSec();
+// right-edge TIME of a pane = last bar time + whitespace scroll, in seconds
+function rightEdgeTime(p) {
+  if (p.lastBarTime == null) return null;
+  return p.lastBarTime + p.chart.timeScale().scrollPosition() * p.tfSec();
+}
+// scroll pane `o` (zoom untouched) so its right edge shows time `t`
+function alignTime(o, t) {
+  if (t == null || o.lastBarTime == null) return;
   const ts = o.chart.timeScale();
-  const w = ts.width();
-  if (!w || !(r.to > r.from)) return;
-  const bars = (r.to - r.from) / sec;
-  ts.applyOptions({ barSpacing: Math.max(0.5, w / bars) });
-  if (o.lastBarTime != null) ts.scrollToPosition((r.to - o.lastBarTime) / sec, false);
+  const pos = (t - o.lastBarTime) / o.tfSec();
+  // already aligned (sub-second) — don't echo endlessly between the panes
+  if (Math.abs((ts.scrollPosition() - pos) * o.tfSec()) < 0.5) return;
   o._syncStamp = performance.now();
+  ts.scrollToPosition(pos, false);
 }
 function wireSync(src) {
   src.chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
     if (!layoutDual || !r) return;
     // echo of a recent programmatic sync onto this pane — don't propagate back
     if (performance.now() - (src._syncStamp || 0) < 250) return;
+    const t = rightEdgeTime(src);
     for (const o of panes) {
-      if (o === src || !o.visible() || o.lastBarTime === null) continue;
-      try { applySyncRange(o, r); } catch (_) { /* tolerate degenerate ranges */ }
+      if (o === src || !o.visible()) continue;
+      try { alignTime(o, t); } catch (_) { /* tolerate degenerate states */ }
     }
   });
   src.chart.subscribeCrosshairMove((param) => {
