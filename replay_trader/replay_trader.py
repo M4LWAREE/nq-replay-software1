@@ -121,7 +121,7 @@ N_RESAMPLE = 128           # random-time control draws per trade
 # parsing across /api/bars, /api/footprint, /api/volprofile. The incremental
 # bar/footprint caches are keyed by these tf_sec values, so adding a row here is
 # all it takes to support a new TF. Unknown labels fall back to 5s.
-TF_SECONDS = {"5s": 5, "30s": 30, "1m": 60, "15m": 900}
+TF_SECONDS = {"5s": 5, "30s": 30, "1m": 60, "5m": 300, "15m": 900}
 
 
 def _tf_sec(tf):
@@ -320,6 +320,7 @@ class ReplaySession:
         self._vwap_built_to = self.start_idx
         self._vwap_pv = 0.0
         self._vwap_v = 0.0
+        self._vwap_p2 = 0.0   # Σpx²·sz — powers the VWAP σ bands (same incremental rules)
         self.speed = 1.0
         self.paused = True
         self.ended = False
@@ -432,11 +433,13 @@ class ReplaySession:
     def _vwap(self, hi_idx):
         """Session VWAP = Σ(px·sz)/Σ(sz) over SEEN ticks in [anchor, hi_idx), where
         anchor = first tick >= 09:30 ET (the RTH open). INCREMENTAL: running sums are
-        carried in self._vwap_pv / _vwap_v and only NEW ticks [built_to, hi_idx) are
-        added each call — never a rescan. NO LOOKAHEAD: hi_idx is the cursor, so only
-        ticks strictly before it contribute. Returns the VWAP in DISPLAY points
-        (offset applied), or None before the anchor / with no volume.
-        Cheap: one dot + one sum over the newly-seen ticks per call."""
+        carried in self._vwap_pv / _vwap_v / _vwap_p2 and only NEW ticks
+        [built_to, hi_idx) are added each call — never a rescan. NO LOOKAHEAD:
+        hi_idx is the cursor, so only ticks strictly before it contribute.
+        Returns (vwap_display_points, sd_points) where sd is the volume-weighted
+        std-dev of price around VWAP (powers the DeepCharts-style σ bands; an
+        offset-free WIDTH, so no px_offset applied), or (None, None) before the
+        anchor / with no volume. Cheap: two dots + one sum over new ticks per call."""
         if self._vwap_anchor is None:
             win_s, _ = self._open_window_ns()
             a = int(np.searchsorted(TS[self.start_idx:self.end_idx], win_s, side="left")) + self.start_idx
@@ -444,11 +447,11 @@ class ReplaySession:
             self._vwap_built_to = self._vwap_anchor
         anchor = self._vwap_anchor
         if hi_idx <= anchor:
-            return None
+            return None, None
         bt = self._vwap_built_to
         # cursor went backwards (shouldn't in normal flow) -> restart from anchor
         if hi_idx < bt:
-            self._vwap_pv = 0.0; self._vwap_v = 0.0; bt = anchor
+            self._vwap_pv = 0.0; self._vwap_v = 0.0; self._vwap_p2 = 0.0; bt = anchor
         if bt < anchor:
             bt = anchor
         if hi_idx > bt:
@@ -456,11 +459,15 @@ class ReplaySession:
             seg_sz = np.asarray(SZ[bt:hi_idx], dtype=np.float64)
             self._vwap_pv += float(np.dot(seg_px, seg_sz))
             self._vwap_v += float(seg_sz.sum())
+            self._vwap_p2 += float(np.dot(seg_px * seg_px, seg_sz))
             bt = hi_idx
         self._vwap_built_to = bt
         if self._vwap_v <= 0:
-            return None
-        return round(self.disp_px(self._vwap_pv / self._vwap_v), 2)
+            return None, None
+        mean = self._vwap_pv / self._vwap_v
+        var = max(self._vwap_p2 / self._vwap_v - mean * mean, 0.0)
+        sd_pts = round((var ** 0.5) * TICK_SIZE, 2)
+        return round(self.disp_px(mean), 2), sd_pts
 
     def advance(self):
         """Advance the replay clock to wall-now and process ticks honestly."""
@@ -885,7 +892,8 @@ class ReplaySession:
         h = round(self.disp_px(acc["h"]), 2); l = round(self.disp_px(acc["l"]), 2)
         vol = int(acc["vol"])
         c["bars"].append({"time": int(bucket), "open": o, "high": h, "low": l,
-                          "close": cl, "volume": vol})
+                          "close": cl, "volume": vol,
+                          "delta": int(acc.get("delta", 0))})
         c["times"].append(int(bucket))
 
     def _ensure_bars(self, tf_sec):
@@ -901,6 +909,10 @@ class ReplaySession:
         ts = np.asarray(TS[lo:hi], dtype=np.int64)
         px = np.asarray(PX[lo:hi], dtype=np.int64)
         sz = np.asarray(SZ[lo:hi], dtype=np.int64)
+        # per-bar signed delta (Σ side·size) — powers DeepCharts-style delta-colored
+        # candles + the 1-min delta panel. Zeros when no aggressor-side data.
+        sd = (np.asarray(SIDE[lo:hi], dtype=np.int64) if SIDE is not None
+              else np.zeros(hi - lo, dtype=np.int64))
         et = pd.DatetimeIndex(pd.to_datetime(ts, utc=True)).tz_convert(ET)
         sec = (et.hour * 3600 + et.minute * 60 + et.second).to_numpy().astype(np.int64)
         base_norm = pd.Timestamp(self.session_start_ns, tz="UTC").tz_convert(ET).normalize()
@@ -908,18 +920,18 @@ class ReplaySession:
         synth = SYNTH_BASE + sec + day_off * 86400
         bucket = ((synth // tf_sec) * tf_sec).astype(np.int64)
         cur_bucket = c["cur_bucket"]; cur = c["cur"]
-        bk_l = bucket.tolist(); px_l = px.tolist(); sz_l = sz.tolist()
+        bk_l = bucket.tolist(); px_l = px.tolist(); sz_l = sz.tolist(); sd_l = sd.tolist()
         for i in range(len(bk_l)):
-            b = bk_l[i]; p = px_l[i]; z = sz_l[i]
+            b = bk_l[i]; p = px_l[i]; z = sz_l[i]; d = sd_l[i] * z
             if cur_bucket is None:
-                cur_bucket = b; cur = {"o": p, "h": p, "l": p, "c": p, "vol": z}
+                cur_bucket = b; cur = {"o": p, "h": p, "l": p, "c": p, "vol": z, "delta": d}
             elif b == cur_bucket:
                 if p > cur["h"]: cur["h"] = p
                 if p < cur["l"]: cur["l"] = p
-                cur["c"] = p; cur["vol"] += z
+                cur["c"] = p; cur["vol"] += z; cur["delta"] = cur.get("delta", 0) + d
             else:
                 self._commit_bar(c, cur_bucket, cur)
-                cur_bucket = b; cur = {"o": p, "h": p, "l": p, "c": p, "vol": z}
+                cur_bucket = b; cur = {"o": p, "h": p, "l": p, "c": p, "vol": z, "delta": d}
         c["cur_bucket"] = cur_bucket; c["cur"] = cur
         c["built_to"] = hi
         return c
@@ -935,7 +947,8 @@ class ReplaySession:
                 o = round(self.disp_px(acc["o"]), 2); cl = round(self.disp_px(acc["c"]), 2)
                 h = round(self.disp_px(acc["h"]), 2); l = round(self.disp_px(acc["l"]), 2)
                 forming_bar = {"time": bk, "open": o, "high": h, "low": l,
-                               "close": cl, "volume": int(acc["vol"])}
+                               "close": cl, "volume": int(acc["vol"]),
+                               "delta": int(acc.get("delta", 0))}
             lo_i = 0 if since_synth is None else bisect.bisect_left(committed_times, since_synth)
             bars = c["bars"][lo_i:]
             if forming_bar is not None and (since_synth is None or forming_bar["time"] >= since_synth):
@@ -1133,7 +1146,9 @@ class ReplaySession:
                 snap["open5m_range"] = self._open5m_range(self.cursor, self.replay_now_ns)
             # VWAP readout — same gating: incremental, computed only when ON.
             if vwap:
-                snap["vwap"] = self._vwap(self.cursor)
+                v, sd = self._vwap(self.cursor)
+                snap["vwap"] = v
+                snap["vwap_sd"] = sd
             return snap
 
     def stats(self):
