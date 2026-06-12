@@ -1,57 +1,109 @@
+/* DeepCharts (Volumetrica) theme — palette sampled from
+   reference/deepcharts_ui_reference.png:
+   chart bg #121212 · axis bg #0a0a0a · toolbar #262626 · buy green #00d301
+   sell red #ff001a · delta purple #612499/#8e3ae3 · profile blue #2c7fff
+   light blue #99d9ea · POC magenta #e9077e · gold #f1b100 · vwap orange #cb9603 */
 :root{
-  --bg:#0d1117; --panel:#161b22; --panel2:#1c2430; --line:#2a3340;
-  --fg:#e6edf3; --muted:#8b949e; --green:#26a69a; --red:#ef5350;
-  --blue:#4d9fff; --orange:#ff9f40; --purple:#b07cff; --yellow:#e3d14b;
-  --accent:#2f81f7;
+  --bg:#0a0a0a; --chart:#121212; --toolbar:#262626; --panel:#1a1a1a; --panel2:#222222;
+  --line:#383838; --line2:#2b2b2b;
+  --fg:#e0e0e0; --muted:#9a9a9a;
+  --green:#00d301; --red:#ff001a; --purple:#8e3ae3; --purple-deep:#612499;
+  --blue:#2c7fff; --blue-light:#99d9ea; --gold:#f1b100; --magenta:#e9077e;
+  --orange:#cb9603; --accent:#2c7fff;
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
   font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px}
 #app{display:flex;flex-direction:column;height:100vh}
 
-/* top bar */
-#topbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
-  padding:6px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
-.grp{display:flex;align-items:center;gap:6px}
+/* top bar — flat Volumetrica toolbar */
+#topbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:5px 10px;background:var(--toolbar);border-bottom:1px solid #000}
+.grp{display:flex;align-items:center;gap:5px}
 .grp.right{margin-left:auto}
-.brand{font-weight:700;letter-spacing:1px;color:var(--accent)}
+.brand{font-weight:700;letter-spacing:1px;color:var(--fg);font-size:12px}
+.brand-sym{color:var(--green);margin-right:4px}
 .lbl{color:var(--muted);font-size:11px;text-transform:uppercase}
 .val{font-variant-numeric:tabular-nums;font-weight:600;min-width:62px;display:inline-block}
 .seps{width:1px;height:18px;background:var(--line);margin:0 2px}
 
-.ctl{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
-  border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:600}
-.ctl:hover{border-color:var(--accent)}
+.ctl{background:var(--toolbar);color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600}
+.ctl:hover{border-color:#5a5a5a;background:#2e2e2e}
 .ctl.active,.spd.active,.tf.active{background:var(--accent);border-color:var(--accent);color:#fff}
 .ctl.alt{border-color:var(--green)}
-.ctl.danger{border-color:var(--red);color:#ffb4b1}
+.ctl.danger{border-color:var(--red);color:#ff8d96}
+.ctl.wide{width:100%}
 
 /* main split */
 #main{display:flex;flex:1;min-height:0}
-#chartwrap{position:relative;flex:1;min-width:0;background:var(--bg)}
-#chart{position:absolute;inset:0}
-#fpcanvas{position:absolute;inset:0;z-index:4;pointer-events:none}
-#fpcanvas.hidden{display:none}
-.badge{position:absolute;top:10px;left:50%;transform:translateX(-50%);
-  background:rgba(47,129,247,.15);border:1px solid var(--accent);color:#cfe3ff;
-  padding:4px 12px;border-radius:20px;font-size:12px;pointer-events:none;z-index:5}
+#panes{position:relative;display:flex;flex:1;min-width:0;background:var(--bg);gap:1px}
+.pane{position:relative;display:flex;flex-direction:column;flex:1;min-width:0;
+  background:var(--chart);border-right:1px solid #000}
+.pane.hidden{display:none}
+
+/* per-pane toolbar — mimics the per-chart strip in DeepCharts */
+.pane-toolbar{display:flex;align-items:center;gap:5px;padding:3px 8px;
+  background:var(--toolbar);border-bottom:1px solid #000;flex-wrap:wrap}
+.instr-chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;
+  background:#1b1b1b;border:1px solid var(--line);border-radius:4px;
+  font-weight:700;font-size:12px}
+.instr-chip .sym{color:var(--green)}
+.instr-chip .tf-label{color:var(--blue-light)}
+.pane-toolbar .tf{padding:3px 8px}
+
+.chartwrap{position:relative;flex:1;min-height:0;background:var(--chart)}
+.chartwrap .chart{position:absolute;inset:0}
+.chartwrap canvas.overlay{position:absolute;inset:0;pointer-events:none}
+.chartwrap canvas.overlay.hidden{display:none}
+.chartwrap .fpcanvas{z-index:4}
+.chartwrap .vpcanvas{z-index:3}
+.chartwrap .bacanvas{z-index:4}
+
+.badge{position:absolute;top:42px;left:50%;transform:translateX(-50%);
+  background:rgba(44,127,255,.15);border:1px solid var(--accent);color:#cfe3ff;
+  padding:4px 12px;border-radius:20px;font-size:12px;pointer-events:none;z-index:9}
 .badge.hidden{display:none}
 
 /* side panel */
 #side{width:340px;flex:0 0 340px;overflow-y:auto;background:var(--panel);
-  border-left:1px solid var(--line);padding:10px;display:flex;flex-direction:column;gap:10px}
-.card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px}
+  border-left:1px solid #000;padding:10px;display:flex;flex-direction:column;gap:10px}
+#side.hidden{display:none}
+.card{background:var(--panel2);border:1px solid var(--line2);border-radius:6px;padding:10px}
 .card h3{margin:0 0 8px;font-size:13px}
 .card h3 .sub{color:var(--muted);font-weight:400;font-size:11px}
 .row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
 .row label{display:flex;flex-direction:column;gap:3px;flex:1;color:var(--muted);font-size:11px}
-.row input{background:var(--bg);border:1px solid var(--line);border-radius:5px;
+.row input{background:var(--bg);border:1px solid var(--line);border-radius:4px;
   color:var(--fg);padding:6px;font-size:14px;font-variant-numeric:tabular-nums}
 .btns{gap:8px}
-.big{flex:1;border:none;border-radius:6px;padding:11px;font-size:14px;font-weight:700;cursor:pointer;color:#fff}
-.buy{background:var(--green)} .sell{background:var(--red)} .flat{background:#475569;width:100%}
+.big{flex:1;border:none;border-radius:4px;padding:10px;font-size:15px;font-weight:800;
+  cursor:pointer;color:#fff;display:flex;flex-direction:column;align-items:center;gap:1px}
+.big .bsub{font-size:9px;font-weight:600;opacity:.85;letter-spacing:.6px}
+.buy{background:#0b9a06}.buy:hover{background:#0db307}
+.sell{background:#c40012}.sell:hover{background:#e00015}
+.flat{background:#444;width:100%;font-size:13px;padding:8px}
+.flat:hover{background:#555}
 .big:active{transform:translateY(1px)}
 .hint{color:var(--muted);font-size:11px;margin:4px 0}
+
+/* T.Panel header + qty stepper (Volumetrica order entry) */
+.tp-head{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  margin:-10px -10px 8px;padding:7px 10px;background:#1b1b1b;
+  border-bottom:1px solid var(--line2);border-radius:6px 6px 0 0}
+.tp-title{font-weight:800;font-size:11px;letter-spacing:1.2px;color:var(--blue-light)}
+#instrument{background:var(--toolbar);color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;padding:4px 6px;font-size:12px;font-weight:700}
+.qtyrow{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.qty-cap{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.8px}
+.qbtn{width:34px;height:30px;background:var(--toolbar);border:1px solid var(--line);
+  border-radius:4px;color:var(--fg);font-size:16px;font-weight:700;cursor:pointer}
+.qbtn:hover{border-color:#5a5a5a}
+.qtyrow input{flex:1;text-align:center;background:var(--bg);border:1px solid var(--line);
+  border-radius:4px;color:var(--fg);padding:5px;font-size:16px;font-weight:700;
+  font-variant-numeric:tabular-nums}
+.presets{flex-wrap:wrap}
+.presets .preset{flex:1;min-width:64px;padding:4px 4px;font-size:10px}
 
 .muted{color:var(--muted)}
 #posbody .pl{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
@@ -64,11 +116,11 @@ table#stats td{padding:3px 4px;font-variant-numeric:tabular-nums}
 table#stats td:first-child{color:var(--muted)}
 table#stats td:last-child{text-align:right;font-weight:600}
 .pos{color:var(--green)} .neg{color:var(--red)}
-.edgebox{margin-top:8px;padding:8px;border-radius:6px;background:var(--bg);
-  border:1px solid var(--line);text-align:center}
+.edgebox{margin-top:8px;padding:8px;border-radius:4px;background:var(--bg);
+  border:1px solid var(--line2);text-align:center}
 .edgebox .big-edge{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}
 .edgebox .cap{color:var(--muted);font-size:11px}
-.edgebox .decomp{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);
+.edgebox .decomp{margin-top:8px;padding-top:8px;border-top:1px solid var(--line2);
   display:flex;flex-direction:column;gap:4px;text-align:left}
 .edgebox .drow{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
 .edgebox .dk{color:var(--fg);font-size:12px;font-weight:600;display:flex;
@@ -79,14 +131,14 @@ table#stats td:last-child{text-align:right;font-weight:600}
 
 .tradeslist{max-height:220px;overflow-y:auto;font-size:11px;font-variant-numeric:tabular-nums}
 .tradeslist .t{display:grid;grid-template-columns:34px 44px 1fr auto;gap:6px;
-  padding:3px 2px;border-bottom:1px solid var(--line)}
+  padding:3px 2px;border-bottom:1px solid var(--line2)}
 .tradeslist .t .s.LONG{color:var(--green)} .tradeslist .t .s.SHORT{color:var(--red)}
 
 /* modal */
 #overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;
   align-items:center;justify-content:center;z-index:50}
 #overlay.hidden{display:none}
-#modal{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+#modal{background:var(--panel);border:1px solid var(--line);border-radius:8px;
   padding:20px;max-width:560px;width:90%}
 #modal h2{margin:0 0 10px}
 .modalbtns{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
@@ -95,48 +147,38 @@ table#stats td:last-child{text-align:right;font-weight:600}
 #modalbody td:first-child{color:var(--muted)}
 #modalbody td:last-child{text-align:right;font-weight:600}
 
-#help{padding:6px 12px;background:var(--panel);border-top:1px solid var(--line);
+#help{padding:6px 12px;background:var(--toolbar);border-top:1px solid #000;
   color:var(--muted);font-size:11px;line-height:1.5}
 #help b{color:var(--fg)}
 .hidden{display:none}
 
-/* ── volume profile overlay + config ─────────────────────────────────────── */
-#vpcanvas{position:absolute;inset:0;z-index:3;pointer-events:none}
-#vpcanvas.hidden{display:none}
-.ctl.gear{padding:5px 8px;font-size:13px;line-height:1}
+/* ── volume profile config popup (one per pane) ───────────────────────────── */
+.ctl.gear{padding:4px 8px;font-size:13px;line-height:1}
 .vpcfg{position:absolute;top:8px;right:8px;z-index:7;width:208px;
-  background:var(--panel);border:1px solid var(--line);border-radius:10px;
-  padding:10px 12px;box-shadow:0 8px 26px rgba(0,0,0,.5);
+  background:var(--panel);border:1px solid var(--line);border-radius:6px;
+  padding:10px 12px;box-shadow:0 8px 26px rgba(0,0,0,.6);
   display:flex;flex-direction:column;gap:8px}
 .vpcfg.hidden{display:none}
-.vpcfg-h{font-weight:700;font-size:12px;letter-spacing:.4px;color:var(--accent);
+.vpcfg-h{font-weight:700;font-size:12px;letter-spacing:.4px;color:var(--blue-light);
   text-transform:uppercase;margin-bottom:2px}
 .vpcfg label{display:flex;align-items:center;justify-content:space-between;
   gap:8px;color:var(--muted);font-size:12px}
-.vpcfg input[type=number],.vpcfg select{width:84px;background:var(--panel2);
-  color:var(--fg);border:1px solid var(--line);border-radius:6px;
+.vpcfg input[type=number],.vpcfg select{width:84px;background:var(--toolbar);
+  color:var(--fg);border:1px solid var(--line);border-radius:4px;
   padding:3px 6px;font-size:12px;font-variant-numeric:tabular-nums}
 .vpcfg label.vpck{justify-content:flex-start;cursor:pointer}
 .vpcfg label.vpck input{width:auto;margin-right:6px;accent-color:var(--accent)}
 
-/* ── bid/ask overlay ─────────────────────────────────────────────────────── */
-#bacanvas{position:absolute;inset:0;z-index:4;pointer-events:none}
-#bacanvas.hidden{display:none}
-
-/* ── studies waffle menu ─────────────────────────────────────────────────── */
+/* ── studies dropdown (per pane + session reads) ──────────────────────────── */
 .studies-wrap{position:relative;display:inline-flex}
-.studies-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:8;
-  background:var(--panel);border:1px solid var(--line);border-radius:10px;
-  padding:8px;box-shadow:0 8px 26px rgba(0,0,0,.5);
-  display:flex;flex-direction:column;gap:6px;min-width:170px}
+.studies-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:12;
+  background:var(--panel);border:1px solid var(--line);border-radius:6px;
+  padding:8px;box-shadow:0 8px 26px rgba(0,0,0,.6);
+  display:flex;flex-direction:column;gap:6px;min-width:178px}
 .studies-menu.hidden{display:none}
 .studies-menu .menuitem{width:100%;text-align:left}
 .studies-menu .menurow{display:flex;gap:6px}
 .studies-menu .menurow .menuitem{flex:1}
-
-/* ── contract selector ───────────────────────────────────────────────────── */
-#instrument{width:100%;background:var(--panel2);color:var(--fg);
-  border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:12px;font-weight:600}
 
 /* ── flow light pill (trailing-60s order-flow permission read) ─────────────── */
 .flowpill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
@@ -146,12 +188,12 @@ table#stats td:last-child{text-align:right;font-weight:600}
 .flowpill #flowlabel{font-size:10px;text-transform:uppercase;opacity:.9}
 .flowpill #flowval{min-width:auto;font-size:12px;font-variant-numeric:tabular-nums}
 .flowpill.neutral{border-color:var(--line);color:var(--muted)}
-.flowpill.long{border-color:var(--green);color:var(--green);background:rgba(38,166,154,.12)}
-.flowpill.short{border-color:var(--red);color:var(--red);background:rgba(239,83,80,.12)}
+.flowpill.long{border-color:var(--green);color:var(--green);background:rgba(0,211,1,.10)}
+.flowpill.short{border-color:var(--red);color:var(--red);background:rgba(255,0,26,.10)}
 .flowpill.off{display:none}   /* toggle OFF -> pill gone entirely, no layout gap */
 .flowpill.flash{animation:flowflash .5s ease-out}
-@keyframes flowflash{0%{box-shadow:0 0 0 0 rgba(47,129,247,.65)}
-  100%{box-shadow:0 0 0 6px rgba(47,129,247,0)}}
+@keyframes flowflash{0%{box-shadow:0 0 0 0 rgba(44,127,255,.65)}
+  100%{box-shadow:0 0 0 6px rgba(44,127,255,0)}}
 
 /* ── open heat pill (5-min opening-range width, 09:30–09:35) ────────────────── */
 .heatpill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
@@ -161,7 +203,7 @@ table#stats td:last-child{text-align:right;font-weight:600}
 .heatpill #heatlabel{font-size:10px;text-transform:uppercase;opacity:.9}
 .heatpill #heatval{min-width:auto;font-size:12px;font-variant-numeric:tabular-nums}
 .heatpill.neutral{border-color:var(--line);color:var(--muted)}
-.heatpill.quiet{border-color:var(--green);color:var(--green);background:rgba(38,166,154,.12)}
-.heatpill.warm{border-color:var(--orange);color:var(--orange);background:rgba(255,159,64,.12)}
-.heatpill.hot{border-color:var(--red);color:var(--red);background:rgba(239,83,80,.14)}
+.heatpill.quiet{border-color:var(--green);color:var(--green);background:rgba(0,211,1,.10)}
+.heatpill.warm{border-color:var(--orange);color:var(--orange);background:rgba(203,150,3,.12)}
+.heatpill.hot{border-color:var(--red);color:var(--red);background:rgba(255,0,26,.12)}
 .heatpill.off{display:none}   /* toggle OFF -> pill gone entirely, no layout gap */

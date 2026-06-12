@@ -9,9 +9,9 @@
 </head>
 <body>
 <div id="app">
-  <!-- top control bar -->
+  <!-- top control bar — DeepCharts-style toolbar -->
   <header id="topbar">
-    <div class="grp brand">REPLAY&nbsp;TRADER</div>
+    <div class="grp brand"><span class="brand-sym">/NQ</span> REPLAY</div>
     <div class="grp">
       <button id="btnPlay" class="ctl">▶ Play</button>
       <span class="seps"></span>
@@ -24,22 +24,11 @@
       <button id="btnClose" class="ctl" title="Jump to :59 of the current 1-min bar, then pause (key 9)">→ :59</button>
     </div>
     <div class="grp">
-      <span class="lbl">TF</span>
-      <button class="tf ctl active" data-tf="5s">5s</button>
-      <button class="tf ctl" data-tf="30s">30s</button>
-      <button class="tf ctl" data-tf="1m">1m</button>
-      <button class="tf ctl" data-tf="15m">15m</button>
-      <span class="seps"></span>
+      <button id="btnLayout" class="ctl" title="Toggle single / dual chart layout (dual = 15m footprint left, your chart right, time-synced)">▯▯ Dual</button>
+      <button id="btnTPanel" class="ctl active" title="Show / hide the trading panel">T. Panel</button>
       <div class="studies-wrap">
-        <button id="btnStudies" class="ctl" title="Studies / overlays">▦ Studies</button>
-        <div id="studiesMenu" class="studies-menu hidden">
-          <button id="btnFoot" class="ctl menuitem" title="Footprint: per-bar buy×sell volume by price (zoom in to see cells)">Footprint</button>
-          <div class="menurow">
-            <button id="btnVP" class="ctl menuitem" title="Fixed-range Volume Profile (volume traded at each price)">Vol Profile</button>
-            <button id="btnVPcfg" class="ctl gear" title="Volume Profile settings">⚙</button>
-          </div>
-          <button id="btnBA" class="ctl menuitem" title="Bid/Ask volume per candle (bid left, ask right)">Bid / Ask</button>
-          <button id="btnVWAP" class="ctl menuitem" title="VWAP: session volume-weighted average price from the 09:30 RTH open, drawn live. When off, the server skips the calc.">VWAP</button>
+        <button id="btnSessStudies" class="ctl" title="Session reads (toolbar pills)">Reads ▾</button>
+        <div id="sessStudiesMenu" class="studies-menu hidden">
           <button id="btnFlow" class="ctl menuitem" title="Flow Light: trailing-60s order-flow permission pill in the toolbar (default on). When off, the server skips the calc.">Flow Light</button>
           <button id="btnHeat" class="ctl menuitem" title="Open Heat: 5-min opening-range width (09:30–09:35) pill in the toolbar (default on). Green &lt;250tk quiet, amber 250–400, red &gt;400 heat protocol. When off, the server skips the calc.">Open Heat</button>
         </div>
@@ -66,46 +55,34 @@
   </header>
 
   <div id="main">
-    <!-- chart -->
-    <section id="chartwrap">
-      <div id="chart"></div>
-      <canvas id="fpcanvas" class="hidden"></canvas>
-      <canvas id="vpcanvas" class="hidden"></canvas>
-      <canvas id="bacanvas" class="hidden"></canvas>
-      <div id="vpcfg" class="vpcfg hidden">
-        <div class="vpcfg-h">Volume Profile</div>
-        <label>Range
-          <select id="vpMode">
-            <option value="visible">Visible range</option>
-            <option value="session">Whole session</option>
-          </select>
-        </label>
-        <label>Rows <input id="vpRows" type="number" min="0" max="200" step="1" value="48"/></label>
-        <label>Value area % <input id="vpVA" type="number" min="0" max="100" step="1" value="70"/></label>
-        <label>Width % <input id="vpWidth" type="number" min="5" max="60" step="1" value="30"/></label>
-        <label>Opacity % <input id="vpOpacity" type="number" min="10" max="100" step="5" value="80"/></label>
-        <label>Side
-          <select id="vpSide"><option value="right">Right</option><option value="left">Left</option></select>
-        </label>
-        <label class="vpck"><input id="vpVAband" type="checkbox" checked/> Value-area shading</label>
-        <label class="vpck"><input id="vpSplit" type="checkbox" checked/> Buy / sell split</label>
-        <label class="vpck"><input id="vpShowPoc" type="checkbox" checked/> POC line</label>
-      </div>
+    <!-- chart panes. pane1 = LEFT context pane (15m footprint, hidden in single
+         layout); pane0 = RIGHT main pane. Internals are built by app.js from a
+         template so every study/canvas exists once per pane. -->
+    <section id="panes" class="single">
+      <div class="pane hidden" id="pane1"></div>
+      <div class="pane" id="pane0"></div>
       <div id="paused-badge" class="badge">PAUSED — press Space / Play</div>
     </section>
 
     <!-- side panel -->
     <aside id="side">
       <div class="card" id="tradecard">
-        <h3>Trade</h3>
-        <div class="row">
-          <label>Lots <input id="lots" type="number" min="1" step="1" value="1"/></label>
+        <div class="tp-head">
+          <span class="tp-title">T. PANEL</span>
+          <select id="instrument">
+            <option value="micro">/MNQ · Micro ($0.50/tk)</option>
+            <option value="mini">/NQ · Mini ($5/tk)</option>
+          </select>
         </div>
-        <div class="row">
-          <label>Contract <select id="instrument">
-            <option value="mini">Mini · NQ ($5/tk)</option>
-            <option value="micro">Micro · MNQ ($0.50/tk)</option>
-          </select></label>
+        <div class="qtyrow">
+          <span class="qty-cap">QTY</span>
+          <button id="qtyMinus" class="qbtn" type="button">−</button>
+          <input id="lots" type="number" min="1" step="1" value="1"/>
+          <button id="qtyPlus" class="qbtn" type="button">+</button>
+        </div>
+        <div class="row btns">
+          <button id="btnSell" class="big sell">SELL<span class="bsub">MKT · S</span></button>
+          <button id="btnBuy" class="big buy">BUY<span class="bsub">MKT · B</span></button>
         </div>
         <div class="row">
           <label>Stop (tk) <input id="stop" type="number" min="0" step="1" placeholder="ticks"/></label>
@@ -116,19 +93,17 @@
           <label>Arm at +X (tk) <input id="arm" type="number" min="0" step="1" placeholder="0"/></label>
         </div>
         <div class="row presets">
+          <button class="ctl preset" data-stop="20" data-target="" data-trail="6" data-arm="25"
+                  title="Validated scalp baseline: stop 20 · trail 6 · arm +25">BASE 20/T6/A25</button>
           <button class="ctl preset" data-stop="5" data-target="40">5 / 40</button>
           <button class="ctl preset" data-stop="10" data-target="20">10 / 20</button>
           <button class="ctl preset" data-stop="40" data-target="5">40 / 5</button>
         </div>
-        <div class="row btns">
-          <button id="btnBuy" class="big buy">BUY (B)</button>
-          <button id="btnSell" class="big sell">SELL (S)</button>
-        </div>
+        <div class="row"><button id="btnApply" class="ctl wide">Apply stop/target/trail</button></div>
         <div class="row">
           <button id="btnFlat" class="big flat">FLATTEN (F)</button>
         </div>
         <div class="hint">Stop/Target/Trail are TICK offsets from your fill. <b>Trail</b> = ratchet distance (peak − N tk); <b>Arm at +X</b> = trail only starts after +X tk profit (0 = from entry). Blank/0 Trail = off. Editable while in a position — type new ticks &amp; hit Apply (recomputed from the original fill; trail never loosens).</div>
-        <div class="row"><button id="btnApply" class="ctl">Apply stop/target/trail</button></div>
       </div>
 
       <div class="card" id="poscard">
@@ -163,9 +138,10 @@
   <div id="help">
     <b>How to use:</b> Press <b>Play</b> (or Space) to start the tape. Bars build tick-by-tick in real time.
     <b>BUY</b>/<b>SELL</b> (keys B/S) open a market order at the next print +slip; set Stop/Target first or
-    edit them live then <b>Apply</b>. <b>FLATTEN</b> (F) closes now. The date is hidden and prices are
-    offset — you're reading the tape blind. Your net is scored against a <b>coin-flip</b> taking the same
-    trades in a random direction: <b>edge/trade</b> is your real edge. End &amp; Reveal shows the date.
+    edit them live then <b>Apply</b>. <b>FLATTEN</b> (F) closes now. <b>▯▯ Dual</b> adds a second time-synced
+    chart (15m footprint context). The date is hidden and prices are offset — you're reading the tape blind.
+    Your net is scored against a <b>coin-flip</b> taking the same trades in a random direction:
+    <b>edge/trade</b> is your real edge. End &amp; Reveal shows the date.
   </div>
 </div>
 <script src="/static/app.js"></script>
