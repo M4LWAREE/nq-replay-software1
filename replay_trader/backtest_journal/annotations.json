@@ -1,0 +1,50 @@
+{
+  "_about": "Hand/AI-written observations layered on top of the objective auto-loaded data. The loader applies these via --seed and NEVER overwrites them on a normal reload. Edit freely; add new session ids as you journal. Regime is a read (range-chop | trend-up | trend-down | high-vol), grade is A-F discipline.",
+  "sessions": {
+    "20260607_235751_5b1551": {
+      "regime": "range-chop",
+      "grade": "C",
+      "psych_during": "Patient enough to scratch green but clearly hunting — 22 trades to net +$53.",
+      "what_went_right": "Stayed net positive on a balance day; fade reads were ~52% and direction_skill +48 (you were on the right side more often than a coinflip).",
+      "what_went_wrong": "Overtraded a tiny edge: 22 trades for +22 ticks while riding a -$1784 max drawdown. Only 6/22 entries were inside the locked 10-11 / 13-15 windows. 4 MANUAL exits = discretionary interference.",
+      "lesson": "On a chop day the fade works but the size of the swing (DD) vs the net says you took too many marginal reps. Fewer, in-window fades would have kept the same green with a quarter of the heat.",
+      "note": "Feb 10 2026 (Tue). Locked config: stop20/trail6/arm25/target200. First entry 09:48 ET (pre-window)."
+    },
+    "20260608_001446_9a85aa": {
+      "regime": "range-chop",
+      "grade": "C+",
+      "psych_during": "Grind mode — 38 trades is a marathon. Discipline held (didn't blow up) but this is volume for volume's sake.",
+      "what_went_right": "Net +$196 / +45 ticks, PF 1.03, 23/38 entries in-window (best window-discipline of the batch). Fade + aligned both >50%.",
+      "what_went_wrong": "38 trades is 3-4x a healthy rep count. Expectancy $5/trade means commissions and noise eat almost all of it; one bad cluster erases the day. Max DD -$1687 to net +$196 is a poor heat-to-reward ratio.",
+      "lesson": "Profit factor barely above 1.0 across 38 trades is a coinflip with a fee drag. Cut the count, protect the in-window reads — that is where your real edge sits.",
+      "note": "Apr 6 2026 (Mon) AM session. Same locked config."
+    },
+    "20260608_212037_aab3d1": {
+      "regime": "trend-down",
+      "grade": "D",
+      "psych_during": "Read was wrong and you kept feeding it — fading a trend day. 5 MANUAL exits suggest second-guessing.",
+      "what_went_right": "You did size one trade down to 1 lot (only non-3-lot in the batch) — a flicker of the cushion instinct.",
+      "what_went_wrong": "-$1372 net, PF 0.65, direction_skill -23.6 (worse than a coinflip on direction). Fade trades went 11/24 for -83 ticks. This was a directional day and you kept fading into it. 25 trades = overtrading a losing read.",
+      "lesson": "When direction_skill goes negative early, the regime is trending and the fade is the wrong tool. The fix is not bigger size or more trades — it is recognizing 'not a fade day' and standing down. No daily-loss halt fired; a Topstep 50K combine busts here.",
+      "note": "Nov 10 2025 (Mon). The first of two trend-day fade beatings in this batch."
+    },
+    "20260609_132716_1c17f2": {
+      "regime": "trend-up",
+      "grade": "F",
+      "psych_during": "This reads like revenge/tilt — all 15 trades fade, all afternoon, no manual cuts, just stop after stop (10 STOP / 5 TRAIL).",
+      "what_went_right": "Trades were all inside the 13-15 locked window (mechanically in-zone) — the only thing that was right.",
+      "what_went_wrong": "Worst session of the batch: -$1824 net, 33% WR, PF 0.45, direction_skill -57, max DD -$2171. 100% fade into a trending afternoon. You let the stop hit 10 times instead of accepting the regime was against you after 3-4.",
+      "lesson": "This is THE session to study. A trend day + pure fade + no kill-switch = max damage. One rule would have saved it: after 3 consecutive stops, the session is over. direction_skill -57 means the market told you by trade 4 and you traded 11 more.",
+      "note": "Oct 30 2025 (Thu) PM. First entry 13:50 ET. No daily-loss limit respected — this also busts a 50K combine."
+    },
+    "20260609_133346_77a655": {
+      "regime": "range-chop",
+      "grade": "A-",
+      "psych_during": "Calm and selective — this is what good looks like for you. 10 trades, all in-window, all fade, clean.",
+      "what_went_right": "Best session of the batch: +$429, PF 1.32, direction_skill +80.25 (huge), max DD only -$683. 10 disciplined fades on a balance day, every entry inside the 13-15 window. One MANUAL exit, well-timed.",
+      "what_went_wrong": "Almost nothing. 50% WR but the winners ran (avg_win $356 vs avg_loss $271) — the fade-into-rotation thesis paid. If anything, you could have pressed size on the high-conviction reads given the cushion you built.",
+      "lesson": "This is the template: range/balance regime + fade + tight rep count + in-window only. Replicate the SELECTION discipline here, not the trade count of the bad days.",
+      "note": "Apr 6 2026 (Mon) PM — same real day as 9a85aa but a totally different, disciplined session. Proof the edge is regime + discipline, not the setup alone."
+    }
+  }
+}

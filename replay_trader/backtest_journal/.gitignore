@@ -1,0 +1,5 @@
+# Generated/iCloud data — the journal data lives in the Obsidian vault, not git.
+*.ndjson
+journal.db
+__pycache__/
+*.pyc
