@@ -52,7 +52,9 @@ def load_db():
             f"INSERT INTO sessions ({','.join(f'\"{c}\"' for c in scols)}) "
             f"VALUES ({','.join('?' for _ in scols)})",
             [[r.get(c) for c in scols] for r in srows])
-        con.execute("CREATE VIEW v_trades AS SELECT t.*, s.regime, s.grade, s.weekday "
+        con.execute("CREATE VIEW v_trades AS SELECT t.*, "
+                    "COALESCE(NULLIF(s.regime_effective,''), s.regime) AS regime, "
+                    "s.grade, s.weekday "
                     "FROM trades t LEFT JOIN sessions s USING(session_id)")
     con.commit()
     return con

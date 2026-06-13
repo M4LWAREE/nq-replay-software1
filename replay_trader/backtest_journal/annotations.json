@@ -1,50 +1,174 @@
 {
-  "_about": "Hand/AI-written observations layered on top of the objective auto-loaded data. The loader applies these via --seed and NEVER overwrites them on a normal reload. Edit freely; add new session ids as you journal. Regime is a read (range-chop | trend-up | trend-down | high-vol), grade is A-F discipline.",
+  "_about": "Mentor write-ups layered on the objective data. `regime` is now decoded exactly from the tick cache (regime_decode.py) and is OBJECTIVE; `regime_override` here only corrects the one 'untagged' session the decoder can't classify (earliest cached day, no prior ATR). The loader applies these via --seed on first-create OR to any still-unreviewed note, and NEVER overwrites a reviewed note. Sizing verdicts use the KB-06 tier system only (Tier-0 = 4 micros ~$40/trade; 1 mini = $100 = hard ceiling; 3 minis = $300 = explicit 'do not'; >=5 minis = off-tier experiment). Kill-rule = 2-3 consecutive stops -> done (KB-06 daily-loss). Grades weigh discipline (kill-rule, in-window %, overtrading, sizing tier, giveback) over raw $, and discount sessions whose P&L is a size artifact.",
   "sessions": {
-    "20260607_235751_5b1551": {
-      "regime": "range-chop",
-      "grade": "C",
-      "psych_during": "Patient enough to scratch green but clearly hunting — 22 trades to net +$53.",
-      "what_went_right": "Stayed net positive on a balance day; fade reads were ~52% and direction_skill +48 (you were on the right side more often than a coinflip).",
-      "what_went_wrong": "Overtraded a tiny edge: 22 trades for +22 ticks while riding a -$1784 max drawdown. Only 6/22 entries were inside the locked 10-11 / 13-15 windows. 4 MANUAL exits = discretionary interference.",
-      "lesson": "On a chop day the fade works but the size of the swing (DD) vs the net says you took too many marginal reps. Fewer, in-window fades would have kept the same green with a quarter of the heat.",
-      "note": "Feb 10 2026 (Tue). Locked config: stop20/trail6/arm25/target200. First entry 09:48 ET (pre-window)."
-    },
-    "20260608_001446_9a85aa": {
-      "regime": "range-chop",
-      "grade": "C+",
-      "psych_during": "Grind mode — 38 trades is a marathon. Discipline held (didn't blow up) but this is volume for volume's sake.",
-      "what_went_right": "Net +$196 / +45 ticks, PF 1.03, 23/38 entries in-window (best window-discipline of the batch). Fade + aligned both >50%.",
-      "what_went_wrong": "38 trades is 3-4x a healthy rep count. Expectancy $5/trade means commissions and noise eat almost all of it; one bad cluster erases the day. Max DD -$1687 to net +$196 is a poor heat-to-reward ratio.",
-      "lesson": "Profit factor barely above 1.0 across 38 trades is a coinflip with a fee drag. Cut the count, protect the in-window reads — that is where your real edge sits.",
-      "note": "Apr 6 2026 (Mon) AM session. Same locked config."
-    },
-    "20260608_212037_aab3d1": {
-      "regime": "trend-down",
-      "grade": "D",
-      "psych_during": "Read was wrong and you kept feeding it — fading a trend day. 5 MANUAL exits suggest second-guessing.",
-      "what_went_right": "You did size one trade down to 1 lot (only non-3-lot in the batch) — a flicker of the cushion instinct.",
-      "what_went_wrong": "-$1372 net, PF 0.65, direction_skill -23.6 (worse than a coinflip on direction). Fade trades went 11/24 for -83 ticks. This was a directional day and you kept fading into it. 25 trades = overtrading a losing read.",
-      "lesson": "When direction_skill goes negative early, the regime is trending and the fade is the wrong tool. The fix is not bigger size or more trades — it is recognizing 'not a fade day' and standing down. No daily-loss halt fired; a Topstep 50K combine busts here.",
-      "note": "Nov 10 2025 (Mon). The first of two trend-day fade beatings in this batch."
-    },
     "20260609_132716_1c17f2": {
-      "regime": "trend-up",
+      "regime_override": "trend-down",
       "grade": "F",
-      "psych_during": "This reads like revenge/tilt — all 15 trades fade, all afternoon, no manual cuts, just stop after stop (10 STOP / 5 TRAIL).",
-      "what_went_right": "Trades were all inside the 13-15 locked window (mechanically in-zone) — the only thing that was right.",
-      "what_went_wrong": "Worst session of the batch: -$1824 net, 33% WR, PF 0.45, direction_skill -57, max DD -$2171. 100% fade into a trending afternoon. You let the stop hit 10 times instead of accepting the regime was against you after 3-4.",
-      "lesson": "This is THE session to study. A trend day + pure fade + no kill-switch = max damage. One rule would have saved it: after 3 consecutive stops, the session is over. direction_skill -57 means the market told you by trade 4 and you traded 11 more.",
-      "note": "Oct 30 2025 (Thu) PM. First entry 13:50 ET. No daily-loss limit respected — this also busts a 50K combine."
+      "psych_during": "Reads like tilt — 15 straight fades into a down-trend, no manual cuts, just stop after stop (10 STOP / 5 TRAIL).",
+      "what_went_right": "All 15 entries were inside the 13-15 locked window — the only thing that was right.",
+      "what_went_wrong": "Worst R of the early batch (-5.5R), -$1824, 33% WR, dir-skill -57, max DD -$2171. Hit 4 consecutive stops and KEPT TRADING — a clear kill-rule breach (KB-06: 2-3 stops = done). Gave back through a green peak. Size 3 minis = $300/trade = the explicit KB-06 'do not'.",
+      "lesson": "THE session to study. Trend-down + pure fade + no kill-switch = max damage. The market said 'wrong tool' by the 3rd stop; 12 more trades followed. One rule saves it: after 3 stops, the session is over.",
+      "note": "Real date 2025-10-30 (Thu). Tick-cache 'untagged' (earliest cached session, no prior ATR baseline); regime_override set to trend-down from the RTH close direction."
+    },
+    "20260607_172504_472b10": {
+      "grade": "C+",
+      "psych_during": "Worked a trend-down day for a thin green, but got loose late (3 stops, kept going).",
+      "what_went_right": "Net +$330 on a down-trend day, mostly fading (12/13), 10/13 in-window, size held at 1 mini.",
+      "what_went_wrong": "Only +0.6R for the day — a lot of activity for little edge. Hit 3 consecutive stops and continued (kill-rule breach), then gave back through the peak.",
+      "lesson": "Green on a trend-down day is fine, but +0.6R across 13 trades is a grind. Respect the 3-stop stop and bank the green instead of round-tripping it.",
+      "note": "Real date 2025-11-03 (Mon). 1 mini = $100/trade = KB-06 hard ceiling (above Tier-0's 4 micros)."
+    },
+    "20260607_174134_37cde4": {
+      "grade": "B",
+      "psych_during": "Confident and in-flow on a clean trend-up day — let winners work (PF 1.58).",
+      "what_went_right": "+3.8R, PF 1.58, max 2 consecutive stops (kill-rule respected), good fade+aligned balance (21/10) on a trending day. Size disciplined at 1 mini.",
+      "what_went_wrong": "31 trades is heavy overtrading, and only 13/31 were in the locked windows — a lot of marginal out-of-window reps diluting a strong day.",
+      "lesson": "Your best raw edge days come from trend-up. Keep the kill-rule discipline; cut the trade count and out-of-window reps and this is an A.",
+      "note": "Real date 2025-11-05 (Wed). 1 mini = KB-06 ceiling tier."
+    },
+    "20260607_191605_4ccb33": {
+      "grade": "D",
+      "psych_during": "The +$1186 feels good but it's a size mirage — a 10-lot swing carried a losing-quality session.",
+      "what_went_right": "Net green and the fade/aligned mix (9/4) was reasonable on a trend-up day.",
+      "what_went_wrong": "Edge was NEGATIVE (-1.0R) — the green is purely the 10-mini size, not skill. 10 minis = $1,000/trade = wildly off-tier (KB-06 ceiling is 1 mini). 4 consecutive stops with trading continued = kill-rule breach.",
+      "lesson": "Dollars from size are not edge. At a tier-compliant size this is a red day. Judge the session on R and discipline, not the inflated $.",
+      "note": "Real date 2025-11-10 (Mon). SIZE EXPERIMENT (1 & 10 minis) — P&L not representative."
+    },
+    "20260607_201809_b21bea": {
+      "grade": "B+",
+      "psych_during": "Calm and patient — max 1 consecutive stop all session is excellent emotional control.",
+      "what_went_right": "+1.6R, PF 1.73, NEVER took 2 stops in a row (best kill-rule discipline of the batch), size held at 1 mini, balanced fade/aligned (11/6) on a trend-up day.",
+      "what_went_wrong": "17 trades is mildly over, and 10/17 in-window leaves some out-of-zone reps. Minor.",
+      "lesson": "This is the discipline template for a positive day: never let losses cluster, let PF do the work. Replicate the 'one stop and reset' rhythm.",
+      "note": "Real date 2025-12-05 (Fri). 1 mini = KB-06 ceiling tier."
+    },
+    "20260607_200645_ef035e": {
+      "grade": "F",
+      "psych_during": "This is a size stress-test, not trading — sizes run 1 / 5 / 50 / 500 minis in one session.",
+      "what_went_right": "Nothing about this is a discipline rep. It demonstrates how size warps the P&L.",
+      "what_went_wrong": "+$3508 is a pure artifact of trading up to 500 minis; the actual edge was -4.6R (deeply negative). 500 minis = ~$50k risk/trade = a catastrophic KB-06 violation (ceiling is 1 mini). 3 consecutive stops, continued.",
+      "lesson": "Quarantine size experiments from the journal's edge read. At any tier-compliant size this is a blow-up; the headline $ is meaningless.",
+      "note": "Real date 2025-12-08 (Mon). SIZE EXPERIMENT (up to 500 minis) — P&L is NOT a trading result. Excluded mentally from edge."
+    },
+    "20260606_233936_5a86a8": {
+      "grade": "C-",
+      "psych_during": "Aimless — 22 trades for a scratch, almost entirely outside the locked windows.",
+      "what_went_right": "Stayed green (+$78), max 2 consecutive stops, on a trend-up day.",
+      "what_went_wrong": "Only 2 of 22 entries were in-window — near-total window-discipline failure. +0.4R is a flat coinflip with fees. Mixed 1/5-mini sizing (5 minis = $500 = 25% MLL/trade).",
+      "lesson": "Trading all day outside 10-11 / 13-15 turns your edge into noise. The window rule exists precisely to stop sessions like this.",
+      "note": "Real date 2025-12-23 (Tue). No flow data (fade/aligned unknown). 5 minis breaches tier."
+    },
+    "20260607_181916_99d1b1": {
+      "grade": "B-",
+      "psych_during": "Handled a high-vol day without blowing up — balanced and steady.",
+      "what_went_right": "+1.4R, PF 1.14, survived a high-vol regime (FH/ATR 2.46), kill-rule respected (max 2 stops), size held at 1 mini, healthy fade/aligned balance (15/12).",
+      "what_went_wrong": "27 trades is overtrading, and 11/27 in-window. High-vol days reward patience, not volume.",
+      "lesson": "Good that high-vol didn't tilt you. Trim the count — on wide-range days fewer, better-located fades beat grinding 27 reps.",
+      "note": "Real date 2026-01-29 (Thu). 1 mini = KB-06 ceiling tier."
+    },
+    "20260607_235751_5b1551": {
+      "grade": "C",
+      "psych_during": "Patient enough to scratch green but clearly hunting — 22 trades to net +$53, riding a -$1784 drawdown.",
+      "what_went_right": "Stayed net positive (+1.1R) on a trend-down day, fading throughout (21/22).",
+      "what_went_wrong": "Hit 4 consecutive stops and kept trading (kill-rule breach). Only 6/22 entries in-window. Size 3 minis = $300 = the KB-06 'do not'. Heat-to-reward was awful (DD -$1784 for +$53).",
+      "lesson": "A tiny green that required a huge drawdown and a kill-rule breach is not a good day. Fewer, in-window fades hold the same green with a quarter of the heat.",
+      "note": "Real date 2026-02-10 (Tue). Regime corrected from my earlier 'range-chop' read to trend-down (exact tick-cache decode)."
+    },
+    "20260607_223830_21b7eb": {
+      "grade": "C-",
+      "psych_during": "Choppy and a bit loose — 4 stops in a row on a trend-up day, ended slightly red.",
+      "what_went_right": "Roughly breakeven (+0.3R), size held at 1 mini, reasonable fade/aligned (13/3).",
+      "what_went_wrong": "-$32 net, PF 0.97, and a 4-consecutive-stop run with trading continued (kill-rule breach). 9/16 in-window.",
+      "lesson": "Breakeven masking a 4-stop cluster is a discipline miss, not a neutral day. The kill-rule would have ended it red but smaller.",
+      "note": "Real date 2026-02-13 (Fri). 1 mini = KB-06 ceiling tier."
+    },
+    "20260606_221031_2c20d2": {
+      "grade": "D+",
+      "psych_during": "Wrong-footed but disciplined about it — took the loss and stopped at 9 trades.",
+      "what_went_right": "Respected trade-count discipline (only 9 trades, max 2 consecutive stops) — did NOT compound a losing read. That restraint is the redeeming feature.",
+      "what_went_wrong": "-$478, PF 0.45, -2.2R — a clearly losing session on a trend-up day. No flow data to grade fade quality.",
+      "lesson": "A red day where you didn't tilt is recoverable. This is what a controlled loss looks like vs. 1c17f2 — same wrong read, a fraction of the damage.",
+      "note": "Real date 2026-02-17 (Tue). 1 mini = KB-06 ceiling tier."
+    },
+    "20260607_002115_06ebb2": {
+      "grade": "F",
+      "psych_during": "Death by a thousand cuts — 36 trades grinding a trend-down day into the ground.",
+      "what_went_right": "Kill-rule technically respected (max 2 consecutive stops) and 28/36 in-window — the discipline that existed was mechanical.",
+      "what_went_wrong": "Worst R of all 21 sessions (-8.3R), -$1316, PF 0.38. 36 trades is the most overtraded session in the set, at 5 minis ($500 = 25% MLL/trade). The kill-rule on consecutive stops didn't fire, but a daily-loss limit should have ended this far earlier.",
+      "lesson": "Consecutive-stop counting isn't enough — you also need the KB-06 DAILY-LOSS cap ($200 / ~half the banked cushion). 36 trades bleeding -8.3R is exactly what that cap is for.",
+      "note": "Real date 2026-02-23 (Mon). 5 minis breaches tier. No flow data."
+    },
+    "20260607_190316_f2b259": {
+      "grade": "D",
+      "psych_during": "Another size mirage — +$2960 headline on a negative-edge, kill-rule-breaching session.",
+      "what_went_right": "Good fade/aligned balance (10/9) on a trend-down day; the green looks great on paper.",
+      "what_went_wrong": "Edge was -3.1R — the +$2960 is the 10-mini size, not skill. 10 minis = ~$1,000/trade = grossly off-tier. 4 consecutive stops with trading continued = kill-rule breach.",
+      "lesson": "Same trap as 4ccb33/ef035e: a big green from size hides a red-quality, undisciplined session. Strip the size and grade the behavior.",
+      "note": "Real date 2026-03-10 (Tue). SIZE EXPERIMENT (1 & 10 minis) — P&L not representative."
+    },
+    "20260607_210139_3b0bdf": {
+      "grade": "A-",
+      "psych_during": "Locked in — this is your edge expressed cleanly. 20 fades on a trend-up day, losses never clustered.",
+      "what_went_right": "Best R of all 21 sessions (+7.5R), PF 1.75, max 2 consecutive stops (kill-rule respected), size held at 1 mini. Fade-heavy (20/2) and it paid.",
+      "what_went_wrong": "22 trades is a touch high and 11/22 in-window — the only blemish. Trim out-of-window reps and it's a clean A.",
+      "lesson": "This + b21bea are the templates: trend-up, fade your spots, never let stops cluster, hold size. Note it for replication.",
+      "note": "Real date 2026-03-16 (Mon). This is also the locked validation-baseline anchor session. 1 mini = KB-06 ceiling tier."
+    },
+    "20260607_215512_dfc425": {
+      "grade": "B-",
+      "psych_during": "Steady — fading a trend-down day and actually making it work for once.",
+      "what_went_right": "+2.1R, PF 1.19, green on a trend-down day (where fade usually bleeds), kill-rule respected (max 2 stops), size held at 1 mini, fade-heavy (14/1).",
+      "what_went_wrong": "Only 6/15 in-window — most of the edge came from out-of-window trades, which isn't repeatable under the rules.",
+      "lesson": "Proof fade CAN win on a down day with good location. Pull those reps into the windows so the result is rule-compliant.",
+      "note": "Real date 2026-03-25 (Wed). 1 mini = KB-06 ceiling tier."
+    },
+    "20260607_122631_a5c7ff": {
+      "grade": "B+",
+      "psych_during": "Sharp and selective — highest profit factor of the set, almost no stop clustering.",
+      "what_went_right": "PF 3.24 (best of all 21), +3.5R, max 1 consecutive stop (elite kill-rule discipline), size held at 1 mini, fade-heavy (16/2) on a trend-down day.",
+      "what_went_wrong": "Only 5/18 in-window — the one real knock. The edge was excellent but largely booked outside the locked windows.",
+      "lesson": "A-quality execution on the wrong clock. Same patience and location inside 10-11 / 13-15 and this is your model session.",
+      "note": "Real date 2026-03-26 (Thu). 1 mini = KB-06 ceiling tier."
     },
     "20260609_133346_77a655": {
-      "regime": "range-chop",
       "grade": "A-",
       "psych_during": "Calm and selective — this is what good looks like for you. 10 trades, all in-window, all fade, clean.",
-      "what_went_right": "Best session of the batch: +$429, PF 1.32, direction_skill +80.25 (huge), max DD only -$683. 10 disciplined fades on a balance day, every entry inside the 13-15 window. One MANUAL exit, well-timed.",
-      "what_went_wrong": "Almost nothing. 50% WR but the winners ran (avg_win $356 vs avg_loss $271) — the fade-into-rotation thesis paid. If anything, you could have pressed size on the high-conviction reads given the cushion you built.",
-      "lesson": "This is the template: range/balance regime + fade + tight rep count + in-window only. Replicate the SELECTION discipline here, not the trade count of the bad days.",
-      "note": "Apr 6 2026 (Mon) PM — same real day as 9a85aa but a totally different, disciplined session. Proof the edge is regime + discipline, not the setup alone."
+      "what_went_right": "+$429, PF 1.32, +1.8R, dir-skill +80, max DD only -$683. 10 disciplined fades on a trend-up day, EVERY entry inside the 13-15 window, kill-rule respected (max 2 stops). One well-timed manual exit.",
+      "what_went_wrong": "Almost nothing on execution. The single blemish is size: 3 minis = $300 = the KB-06 'do not' — at a tier-compliant size this same session is an A.",
+      "lesson": "The template for SELECTION: trend-up + fade + tight rep count + in-window only. Fix the size to Tier-0 and it's flawless.",
+      "note": "Real date 2026-04-06 (Mon) PM. Regime corrected from my earlier 'range-chop' read to trend-up (exact decode). Same calendar day as 9a85aa but a far more disciplined session."
+    },
+    "20260608_001446_9a85aa": {
+      "grade": "C",
+      "psych_during": "Grind mode — 38 trades is a marathon. Didn't blow up, but this is volume for volume's sake.",
+      "what_went_right": "Net +$196 / +2.2R, best in-window discipline of the batch (23/38), fade-heavy (33/5) on a trend-up day.",
+      "what_went_wrong": "38 trades is the 2nd-most overtraded session here. Hit 3 consecutive stops and continued (kill-rule breach) and gave back through a green peak. Size 3 minis = the KB-06 'do not'.",
+      "lesson": "PF barely above 1.0 across 38 trades is a coinflip with fee drag. Cut the count hard, honor the 3-stop kill, drop to Tier-0 size.",
+      "note": "Real date 2026-04-06 (Mon) AM. Regime corrected from 'range-chop' to trend-up (exact decode)."
+    },
+    "20260606_222356_f407d2": {
+      "grade": "D",
+      "psych_during": "Frustrating — the one true range-chop day, and it bled instead of paying.",
+      "what_went_right": "Kill-rule respected (max 2 stops) and 20/25 in-window — mechanically disciplined.",
+      "what_went_wrong": "-$1100, PF 0.38, -5.0R on the ONLY range-chop session in the set. 25 trades overtrading. No flow data, so fade quality is unknown — but the result says location/timing was poor.",
+      "lesson": "Range-chop is NOT an automatic fade win — this is the cleanest counter-evidence to the 'fade loves chop' assumption. Choppy ranges still require good location; volume made it worse.",
+      "note": "Real date 2026-04-10 (Fri). Only exact range-chop day (FH/ATR 0.46). 1 mini = KB-06 ceiling tier."
+    },
+    "20260608_212037_aab3d1": {
+      "grade": "D",
+      "psych_during": "Wrong read, kept feeding it — fading hard on a trend-up day that didn't rotate.",
+      "what_went_right": "Did size one trade down to 1 mini (the only flicker of the cushion instinct); 18/25 in-window.",
+      "what_went_wrong": "-$1372, PF 0.65, -2.9R, dir-skill -24. 24/25 trades were fades and the day trended through them. Hit 3 consecutive stops and continued (kill-rule breach). Size up to 3 minis = the KB-06 'do not'.",
+      "lesson": "When dir-skill is negative early, the fade is the wrong tool for the regime — stand down, don't add reps. (Regime corrected: this was trend-UP, not the trend-down I first read.)",
+      "note": "Real date 2025-11-10 (Mon). Regime corrected from 'trend-down' to trend-up (exact decode)."
+    },
+    "20260607_213110_f6a697": {
+      "grade": "B",
+      "psych_during": "Tidy and controlled — small green, mostly in-window, stopped at a sensible count.",
+      "what_went_right": "+$163, PF 1.37, +2.0R, 9/10 in-window, only 10 trades, all fades on a trend-up day. Took 3 stops but STOPPED after (kill-rule effectively respected).",
+      "what_went_wrong": "Gave back roughly half of a green peak before finishing — the green-giveback rule (KB-06) should have locked it sooner. Size held at 1 mini (ceiling).",
+      "lesson": "Good small disciplined day. The one tweak: when up and giving back half, stop — protect the green per the giveback rule.",
+      "note": "Real date 2026-04-22 (Wed). 1 mini = KB-06 ceiling tier."
     }
   }
 }

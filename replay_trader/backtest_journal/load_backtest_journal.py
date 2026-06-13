@@ -35,6 +35,7 @@ Env override: BACKTEST_JOURNAL_VAULT=/path/to/Backtest Journal
 import argparse, glob, json, os, re
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import regime_decode
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SESSIONS_DIR = os.path.normpath(os.path.join(HERE, "..", "sessions"))
@@ -52,10 +53,14 @@ AUTO_END = "<!-- AUTO:STATS:END -->"
 # frontmatter: objective keys (refreshed) vs annotation keys (preserved)
 FM_OBJ = ["session_id","real_date","weekday","mode","n_trades","win_pct","net_usd",
     "net_ticks","expectancy","profit_factor","avg_win","avg_loss","max_dd",
-    "direction_skill","selection_skill","open5m_range","first_entry_et","last_exit_et",
+    "direction_skill","selection_skill","open5m_range",
+    "regime","regime_effective","regime_atr_ratio","rth_close_dir","first_hour_range_pts",
+    "first_entry_et","last_exit_et",
     "in_window_trades","fade_trades","aligned_trades","fade_net_ticks","aligned_net_ticks",
     "source_file","loaded_at","reviewed"]
-FM_ANN = ["regime","grade","psych_pre","psych_during","psych_post","lesson"]
+# regime_override is a manual correction (e.g. the earliest 'untagged' session);
+# effective regime = regime_override or regime.
+FM_ANN = ["regime_override","grade","psych_pre","psych_during","psych_post","lesson"]
 TRADE_ANN = ["setup_tag","levels_in_play","psych_state","went_right","went_wrong","note"]
 
 
@@ -73,11 +78,10 @@ def time_window(dt):
     if 780 <= m < 900: return "13-15"
     return "other"
 
-def provisional_regime(stats):
-    ds = stats.get("direction_skill") or 0
-    if ds >= 20:  return "range-chop"
-    if ds <= -20: return "trend"
-    return "mixed"
+def effective_regime(fm):
+    """regime_override or regime, from a parsed frontmatter dict."""
+    ov = fm_value(fm.get("regime_override", "") or "")
+    return ov or (fm_value(fm.get("regime", "") or "") or "untagged")
 
 
 # --------------------------------------------------------------- flat YAML I/O
@@ -150,6 +154,7 @@ def build_session(path):
             "coinflip_ev_net": t.get("coinflip_ev_net"), "random_time_ev_net": t.get("random_time_ev_net"),
         })
     net_tk = sum(t["pnl_ticks"] for t in trows)
+    rg = regime_decode.regime_for_entry_idx(trades[0].get("entry_idx"))
     sess = {
         "session_id": sid, "real_date": t0.date().isoformat(), "weekday": t0.strftime("%a"),
         "mode": d.get("mode"), "n_trades": s.get("n", len(trows)), "win_pct": s.get("wr"),
@@ -157,6 +162,8 @@ def build_session(path):
         "profit_factor": s.get("pf"), "avg_win": s.get("avg_win"), "avg_loss": s.get("avg_loss"),
         "max_dd": s.get("max_dd"), "direction_skill": s.get("direction_skill"),
         "selection_skill": s.get("selection_skill"), "open5m_range": s.get("open5m_range"),
+        "regime": rg["regime"], "regime_atr_ratio": rg["ratio"], "rth_close_dir": rg["close_dir"],
+        "first_hour_range_pts": rg["first_hour_pts"], "_suggested_override": rg["suggested_override"],
         "first_entry_et": t0.strftime("%H:%M:%S"), "last_exit_et": tN.strftime("%H:%M:%S"),
         "in_window_trades": inwin, "fade_trades": fade, "aligned_trades": aligned,
         "fade_net_ticks": fade_tk, "aligned_net_ticks": al_tk,
@@ -190,10 +197,12 @@ def auto_block(sess, trows):
     L = []
     L.append(AUTO_START)
     g = sess.get("_grade") or "—"
+    ratio = sess.get("regime_atr_ratio")
+    rtxt = f"{sess.get('_regime','?')}" + (f" (FH/ATR {ratio})" if ratio else "")
     L.append(f"> **{sess['real_date']} {sess['weekday']}** · {sess['n_trades']} trades · "
              f"WR {sess['win_pct']}% · net **${sess['net_usd']}** ({sess['net_ticks']:+} tk) · "
              f"PF {sess['profit_factor']} · dir-skill {sess['direction_skill']} · "
-             f"regime *{sess.get('_regime','?')}* · grade **{g}**")
+             f"regime *{rtxt}* · grade **{g}**")
     L.append("")
     L.append(f"- **Fade vs aligned:** {sess['fade_trades']} fade ({sess['fade_net_ticks']:+}tk) · "
              f"{sess['aligned_trades']} aligned ({sess['aligned_net_ticks']:+}tk)")
@@ -244,20 +253,24 @@ def write_session_note(sess, trows, seed_ann, do_seed):
         else:
             prev_body = full_body
 
-    # resolve annotations: preserve existing > seed (first create) > default
+    # A reviewed note is the source of truth for its annotations; never overwrite it.
+    # An unreviewed/new note may be seeded from annotations.json (the grading pass).
+    prev_reviewed = exists and str(prev_fm.get("reviewed", "")).strip() == "true"
+    can_seed = bool(do_seed and seed_ann and not prev_reviewed)
     ann = {}
     for k in FM_ANN:
-        if exists and prev_fm.get(k) not in (None, "", '""'):
+        if prev_reviewed and prev_fm.get(k) not in (None, "", '""'):
             ann[k] = fm_value(prev_fm[k])
-        elif do_seed and seed_ann:
+        elif can_seed:
             ann[k] = seed_ann.get(k, "")
+        elif exists and prev_fm.get(k) not in (None, "", '""'):
+            ann[k] = fm_value(prev_fm[k])
         else:
             ann[k] = ""
-    reviewed = bool(seed_ann) or (exists and str(prev_fm.get("reviewed", "")).strip() == "true")
-    if not ann.get("regime"):
-        ann["regime"] = provisional_regime(sess)
+    reviewed = prev_reviewed or bool(can_seed and seed_ann.get("grade"))
     sess["_grade"] = ann.get("grade") or ""
-    sess["_regime"] = ann.get("regime")
+    sess["_regime"] = ann.get("regime_override") or sess["regime"]
+    sess["regime_effective"] = sess["_regime"]
 
     # frontmatter
     fm = {"tags": "[backtest-session, nq, replay]"}
@@ -276,7 +289,12 @@ def write_session_note(sess, trows, seed_ann, do_seed):
     lines.append("---")
     fm_text = "\n".join(lines)
 
-    body = (prev_body if exists else human_scaffold(seed_ann))
+    if can_seed:
+        body = human_scaffold(seed_ann)
+    elif exists:
+        body = prev_body
+    else:
+        body = human_scaffold(None)
     content = fm_text + "\n\n" + auto_block(sess, trows) + "\n\n" + body
     open(path, "w").write(content)
     return path, ("updated" if exists else "created")
@@ -340,7 +358,7 @@ def refresh_dashboard_stats():
         fm, _ = parse_frontmatter(open(p).read())
         sid = (fm.get("session_id") or "").strip().strip('"')
         if not sid: continue
-        regime[sid] = fm_value(fm.get("regime", "") or "?")
+        regime[sid] = fm_value(fm.get("regime_effective", "")) or effective_regime(fm) or "?"
         grade[sid] = fm_value(fm.get("grade", "") or "")
         reviewed[sid] = str(fm.get("reviewed", "")).strip() == "true"
         try: sess_net[(fm_value(fm.get("real_date")), sid)] = float(fm.get("net_usd"))
@@ -466,7 +484,7 @@ views:
       - profit_factor
       - direction_skill
       - in_window_trades
-      - regime
+      - regime_effective
       - grade
       - reviewed
   - type: table
@@ -480,12 +498,12 @@ views:
       - net_usd
       - profit_factor
       - direction_skill
-      - regime
+      - regime_effective
       - grade
   - type: table
     name: By Regime
     order:
-      - regime
+      - regime_effective
       - real_date
       - n_trades
       - net_usd
@@ -496,7 +514,7 @@ views:
     name: Fade vs Aligned
     order:
       - real_date
-      - regime
+      - regime_effective
       - fade_trades
       - fade_net_ticks
       - aligned_trades
@@ -511,7 +529,7 @@ views:
       - real_date
       - n_trades
       - net_usd
-      - regime
+      - regime_effective
 """
 
 DASHBOARD_MD = """\
@@ -544,7 +562,7 @@ the loader runs — browsable with zero plugins.
 ### Scoreboard
 ```dataview
 TABLE real_date AS date, n_trades AS n, win_pct AS "WR%", net_usd AS "net $",
-      profit_factor AS PF, direction_skill AS "dir-skill", regime, grade
+      profit_factor AS PF, direction_skill AS "dir-skill", regime_effective AS regime, grade
 FROM #backtest-session
 SORT real_date ASC
 ```
@@ -554,7 +572,7 @@ SORT real_date ASC
 TABLE length(rows) AS sessions, sum(rows.net_usd) AS "net $",
       sum(rows.fade_net_ticks) AS "fade tk", sum(rows.aligned_net_ticks) AS "aligned tk"
 FROM #backtest-session
-GROUP BY regime
+GROUP BY regime_effective
 ```
 
 ### Grade distribution

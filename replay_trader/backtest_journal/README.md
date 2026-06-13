@@ -21,6 +21,10 @@ by code. Designed for hundreds–thousands of trades.
   Backtest Dashboard.md             # static snapshot + Bases embed + Dataview blocks
 ```
 
+Code (committed in the repo, generates the vault files):
+`replay_trader/backtest_journal/{load_backtest_journal.py, regime_decode.py,
+query.py, annotations.json, README.md, .gitignore}`.
+
 `<Vault>` = `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Trading`.
 
 The **code** (loader/query/spec/dashboard templates) lives in the git repo at
@@ -42,11 +46,22 @@ idempotent (re-running 21 sessions preserves hand edits in both notes and ndjson
 
 Objective: `session_id, real_date, weekday, mode, n_trades, win_pct, net_usd,
 net_ticks, expectancy, profit_factor, avg_win, avg_loss, max_dd, direction_skill,
-selection_skill, open5m_range, first_entry_et, last_exit_et, in_window_trades,
-fade_trades, aligned_trades, fade_net_ticks, aligned_net_ticks, source_file,
-loaded_at, reviewed`.
-Annotation: `regime` (range-chop | trend-up | trend-down | trend | mixed; auto-set
-provisional until reviewed), `grade` (A–F), `psych_pre/during/post`, `lesson`.
+selection_skill, open5m_range, regime, regime_effective, regime_atr_ratio,
+rth_close_dir, first_hour_range_pts, first_entry_et, last_exit_et,
+in_window_trades, fade_trades, aligned_trades, fade_net_ticks, aligned_net_ticks,
+source_file, loaded_at, reviewed`.
+Annotation: `regime_override`, `grade` (A–F), `psych_pre/during/post`, `lesson`.
+
+**Regime is now decoded EXACTLY from the tick cache** (`regime_decode.py`, mirrors
+`tradedb/regime.py`): each trade's `entry_idx` → real date via `session_index.json`
+→ first-hour range vs a 14-session rolling ATR baseline → `range-chop` (<0.5×) /
+`high-vol` (>1.5×) / `trend-up` / `trend-down` (by RTH close direction). The
+earliest cached session has no prior ATR and comes back `untagged`; that is the
+only case `regime_override` is used (set from the RTH close direction).
+**Query `regime_effective`** (= `regime_override` or `regime`) — it's the single
+clean column Bases/Dataview/code all read. Needs numpy + the tick cache at
+`tick_engine/cache/`; without them regime degrades to `untagged` and the rest of
+the loader still runs.
 
 > Keep frontmatter values **single-line** (the loader uses a tiny flat-YAML parser
 > to preserve them without a yaml dependency). Long-form psych/narrative goes in the
@@ -124,8 +139,20 @@ or just edit the note in Obsidian.
 
 ## Current contents
 
-21 sessions / 413 trades backfilled (real dates 2025-10-30 → 2026-04-22). 5 are
-mentor-reviewed (grades A-/C/C+/D/F); 16 are auto-imported (`reviewed: false`) with
-provisional regimes awaiting review. Headline at scale: **range-chop fade =
-+1057 ticks across 188 trades @ 66.5% WR**; **trend-day fade is deeply negative** —
-the fade edge is regime-dependent.
+21 sessions / 413 trades (real dates 2025-10-30 → 2026-04-22), **all mentor-reviewed
+with exact regimes**. Grade distribution: A- 2 · B+ 2 · B 2 · B- 2 · C+ 1 · C 2 ·
+C- 2 · D+ 1 · D 4 · F 3.
+
+**Headline edge (with EXACT regimes):** fade pays on **trend-up** days
+(+672 tk across 151 trades @ 60.9% WR) and **high-vol** (+171 tk @ 73.3%), but
+**loses on trend-down** days (−369 tk across 95 trades despite a 56.8% WR — the
+losers run bigger). The earlier "+1057 tk range-chop fade" number was an artifact
+of a provisional regime heuristic; once regimes are decoded from the tick cache
+there is essentially no range-chop fade sample (the one true range-chop day was a
+−5R loser), and the real structure is a trend-up-vs-trend-down asymmetry.
+
+**Discipline patterns:** overtrading amplifies losses (the F/D sessions run
+25–38 trades; the A-/B sessions stay ≤22 and never cluster stops). Several big-$
+sessions are **size experiments** (up to 500 minis) whose P&L is not edge —
+graded on R/discipline, not the inflated dollars. Sizing is read only through the
+KB-06 tiers (Tier-0 = 4 micros; 1 mini = hard ceiling; 3 minis = "do not").
