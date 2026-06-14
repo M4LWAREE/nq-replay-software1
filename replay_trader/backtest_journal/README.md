@@ -129,10 +129,32 @@ python3 -c "import pandas as pd; df=pd.read_json('$VAULT/trades.ndjson', lines=T
 `query.py` builds an in-memory SQLite from `trades.ndjson` and joins session
 `regime`/`grade` from the note frontmatter into a `v_trades` view.
 
-## Adding sessions later
+## Auto-ingest from the replay engine (no manual step)
+
+The replay engine (`replay_trader.py`) auto-appends every finished session. On
+session end, `ReplaySession._end_session()` → `_maybe_journal()` fires the loader
+for that one session as a **fire-and-forget subprocess** (`_journal_session_async`),
+after `_persist_json()` has written the session JSON. Same idempotent loader
+(`load_backtest_journal.py <id> --seed`), so the note + `trades.ndjson` rows appear
+automatically with the exact regime, and hand annotations are preserved.
+
+- **Idempotent twice over:** `self.journaled` guards double-ingest within a run; the
+  loader is keyed by `session_id`/`order_id` so re-runs never dupe.
+- **Concurrency-safe:** the loader takes an advisory `flock` on `.journal.lock` in
+  the vault, so sessions ending near-simultaneously queue instead of racing on
+  `trades.ndjson` (verified: 2 concurrent runs → no lost rows, no corruption).
+- **Never blocks/crashes the engine:** daemon thread; errors caught and logged
+  (`[replay_trader] journal OK/FAILED …`).
+- **Threshold:** journals any session with ≥1 trade — raise it via the
+  `self.stats().get("n", 0) < 1` guard in `_maybe_journal()`.
+
+Safety-net (optional cron/launchd): `load_backtest_journal.py --all --min-trades 9
+--seed` re-syncs everything; idempotent, only adds what's new.
+
+## Adding sessions manually
 
 Print new replay sessions, then `python3 load_backtest_journal.py --all
---min-trades 9 --seed`. New sessions get a note (provisional `regime`,
+--min-trades 9 --seed`. New sessions get a note (exact `regime`,
 `reviewed: false`, blank `grade`) and their trades append to `trades.ndjson`.
 Add a block to `annotations.json` keyed by `session_id` for a seeded mentor read,
 or just edit the note in Obsidian.

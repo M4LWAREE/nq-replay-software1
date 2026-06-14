@@ -28,6 +28,8 @@ import hashlib
 import json
 import os
 import secrets
+import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -234,6 +236,33 @@ def _post_discord_async(session_id, stats):
     threading.Thread(target=_worker, daemon=True).start()
 
 
+# ── Backtest Journal auto-ingest ─────────────────────────────────────────────
+# On session end, append the session into the Obsidian Backtest Journal by
+# invoking the (idempotent) loader as a fire-and-forget subprocess. The loader
+# reads sessions/<id>.json (already persisted by _persist_json), decodes the
+# exact regime, appends to trades.ndjson + writes a session note, and PRESERVES
+# any hand annotations. Never blocks or crashes the engine.
+_JOURNAL_LOADER = HERE / "backtest_journal" / "load_backtest_journal.py"
+
+
+def _journal_session_async(session_id):
+    if not _JOURNAL_LOADER.exists():
+        return  # journal not installed — silently inert
+    def _worker():
+        try:
+            r = subprocess.run(
+                [sys.executable, str(_JOURNAL_LOADER), session_id, "--seed"],
+                cwd=str(_JOURNAL_LOADER.parent),
+                capture_output=True, text=True, timeout=180)
+            tag = "OK" if r.returncode == 0 else f"rc={r.returncode}"
+            print(f"[replay_trader] journal {tag} for {session_id}: "
+                  f"{(r.stdout or r.stderr).strip().splitlines()[-1] if (r.stdout or r.stderr).strip() else ''}",
+                  flush=True)
+        except Exception as e:   # noqa: BLE001 — never let journaling crash anything
+            print(f"[replay_trader] journal FAILED for {session_id}: {e!r}", flush=True)
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def _resolve_dir(path, entry_tick, d, tdist, sdist, trail_tk, arm_tk, slip):
     """Resolve ONE direction `d` (+1 long / -1 short) over a FIXED integer-tick
     `path` (entry-print .. window-end) under target / fixed-stop / TRAILING-stop
@@ -409,6 +438,7 @@ class ReplaySession:
         self.paused = True
         self.ended = False
         self.posted = False         # Discord scoreboard posted? (prevents double-post)
+        self.journaled = False      # appended to Backtest Journal? (prevents double-ingest)
         self.last_wall = time.time()
 
         # trading state
@@ -908,6 +938,7 @@ class ReplaySession:
         self.paused = True
         self._persist_json()
         self._maybe_post_discord()
+        self._maybe_journal()
 
     # ---- order entry API ----
     @staticmethod
@@ -1476,6 +1507,20 @@ class ReplaySession:
             self.posted = True
         _post_discord_async(self.id, st)
 
+    def _maybe_journal(self):
+        """Append this session to the Backtest Journal ONCE, iff it had >=1 trade.
+        Idempotent via self.journaled AND the loader itself (re-runs never dupe —
+        notes/ndjson are keyed by session_id/order_id), so the same belt-and-braces
+        as _maybe_post_discord. Fire-and-forget; runs after _persist_json so the
+        session JSON is on disk for the loader to read."""
+        with self.lock:
+            if self.journaled:
+                return
+            if self.stats().get("n", 0) < 1:
+                return
+            self.journaled = True
+        _journal_session_async(self.id)
+
     def reveal(self):
         """Only called on explicit session end — reveals the hidden date."""
         return {"date": self._hidden_date, "px_offset_ticks": self.px_offset}
@@ -1512,6 +1557,7 @@ def new_session():
             # abandon-by-starting-new: post the outgoing session's card once (>=1 trade)
             try:
                 prev._maybe_post_discord()
+                prev._maybe_journal()
             except Exception:
                 pass
         s = ReplaySession(mode=mode, slip_tk=slip)
