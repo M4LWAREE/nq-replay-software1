@@ -162,6 +162,12 @@ def _tf_sec(tf):
 # sessions stay blind.
 DISCORD_WEBHOOK_FILE = HERE / "discord_webhook.txt"
 
+# Master on/off switch for Discord auto-posting. Flip to True to re-enable
+# (a configured discord_webhook.txt is still required). OFF = no session ever
+# posts to Discord, regardless of the webhook file. Everything else on the
+# session-end path (journal ingest, CSV/JSON persistence) is unaffected.
+DISCORD_ENABLED = False
+
 
 def _discord_webhook_url():
     """Webhook URL from discord_webhook.txt (read fresh each post so dropping the URL
@@ -216,6 +222,8 @@ def _post_discord_async(session_id, stats):
     Never raises; runs on a daemon thread so it can't block the caller. Logs the
     outcome of EVERY attempt with flush=True so failures are visible immediately
     (the server's stdout is block-buffered to its log file otherwise)."""
+    if not DISCORD_ENABLED:
+        return   # auto-posting disabled via the master switch — no network attempt
     url = _discord_webhook_url()
     if not url:
         return   # silently inert — no network attempt
