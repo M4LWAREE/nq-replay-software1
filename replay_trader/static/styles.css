@@ -142,7 +142,11 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
 .pane{position:relative;display:flex;flex-direction:column;flex:1;min-width:0;
   background:var(--chart);border-right:1px solid #000}
 .pane.hidden{display:none}
-.pane-toolbar{display:flex;align-items:center;gap:5px;padding:3px 8px;
+/* per-pane mini-toolbar is hidden for the clean ATAS look — the top toolbar
+   drives the main pane's TF, and Studies is folded into the top "Indicators"
+   button (atas-ui.js moves the menu there). Kept in the DOM so app.js's TF /
+   studies handlers stay bound and reachable. */
+.pane-toolbar{display:none;align-items:center;gap:5px;padding:3px 8px;
   background:#10141c;border-bottom:1px solid #000;flex-wrap:wrap}
 .instr-chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;
   background:#161b25;border:1px solid var(--line);border-radius:4px;font-weight:700;font-size:11px}
@@ -170,21 +174,25 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
   padding:4px 12px;border-radius:20px;font-size:12px;pointer-events:none;z-index:9}
 .badge.hidden{display:none}
 
-/* 6. DOM / volume ladder (right edge) */
-#domLadder{position:relative;flex:0 0 86px;width:86px;background:var(--chart);
-  border-left:1px solid #000;overflow:hidden}
-.dom-cap{position:absolute;top:2px;left:4px;font-size:9px;color:var(--muted);
-  letter-spacing:.6px;z-index:2;pointer-events:none}
-#domCanvas{position:absolute;inset:0;width:100%;height:100%}
+/* 6. DOM / volume ladder — drawn by atas-ui.js as an overlay canvas pinned over
+   pane0's right price axis (ATAS-style), not a separate column. */
+.dom-overlay{position:absolute;inset:0;width:100%;height:100%;
+  pointer-events:none;z-index:5}
 
-/* 7. bottom panes: DOM Strength + Volume / Delta / Session Delta */
+/* 7. bottom panes: DOM Strength (bars proxy) + Volume / Delta / Session Delta
+   (per-bar NUMBERS, column-aligned to the chart above — like the ATAS footprint
+   bottom rows). Number rows are short single-line strips; DOM Strength is taller
+   for its bar histogram. */
 #bottomPanes{flex:0 0 auto;display:flex;flex-direction:column;background:var(--chart);
   border-top:1px solid #000}
-.bp-row{position:relative;height:34px;border-top:1px solid var(--line2)}
+.bp-row{position:relative;height:20px;border-top:1px solid var(--line2)}
 .bp-row:first-child{border-top:none}
-.bp-domstr{height:40px}
-.bp-label{position:absolute;top:3px;left:6px;z-index:2;font-size:10px;color:var(--muted);
-  pointer-events:none;background:rgba(14,18,24,.6);padding:0 3px;border-radius:2px}
+.bp-domstr{height:38px}
+.bp-label{position:absolute;top:50%;transform:translateY(-50%);left:6px;z-index:2;
+  font-size:10px;color:var(--muted);pointer-events:none;
+  background:linear-gradient(90deg,rgba(14,18,24,.95) 70%,rgba(14,18,24,0));
+  padding:1px 10px 1px 3px;border-radius:2px}
+.bp-domstr .bp-label{top:3px;transform:none}
 .bp-label em{color:var(--muted);opacity:.7;font-style:normal;font-size:9px}
 .bp-canvas{position:absolute;inset:0;width:100%;height:100%}
 

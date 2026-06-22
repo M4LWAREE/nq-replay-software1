@@ -108,14 +108,55 @@
     if (!tfCfg.contains(e.target) && e.target.id !== "tfConfigBtn") closeTfCfg();
   });
 
-  // ── 2c. decorative / wired toolbar icons ────────────────────────────────────
+  // ── 2c. fold the main pane's Studies menu into the top "Indicators" button.
+  //    The per-pane mini-toolbar is hidden (display:none), so we relocate pane0's
+  //    .studies-menu to <body> and pop it under the Indicators button. The menu's
+  //    buttons keep the handlers app.js bound to them; a click-capture stops the
+  //    menu from closing on each toggle so multiple studies can be flipped.
   const tbIndicators = $("#tbIndicators");
-  if (tbIndicators) tbIndicators.onclick = () => {           // open main-pane studies
-    const host = $("#pane0"); const btn = host && host.querySelector(".studies-btn");
-    if (btn) btn.click();
-  };
+  let studiesMenu = null;
+  function setupIndicatorsMenu() {
+    if (studiesMenu || !tbIndicators) return !!studiesMenu;
+    const menu = document.querySelector("#pane0 .studies-menu");
+    if (!menu) return false;
+    document.body.appendChild(menu);
+    menu.classList.add("hidden", "floating-menu");
+    menu.style.position = "fixed";
+    menu.style.right = "auto";       // override the .studies-menu right:0 anchor
+    menu.style.zIndex = "60";
+    menu.addEventListener("click", (e) => e.stopPropagation());  // keep open on toggle
+    studiesMenu = menu;
+    tbIndicators.onclick = (e) => {
+      e.stopPropagation();
+      const show = menu.classList.contains("hidden");
+      if (show) {
+        const r = tbIndicators.getBoundingClientRect();
+        menu.style.top = (r.bottom + 6) + "px";
+        menu.style.left = Math.min(r.left, window.innerWidth - 200) + "px";
+        menu.classList.remove("hidden");
+        tbIndicators.classList.add("active");
+      } else {
+        menu.classList.add("hidden");
+        tbIndicators.classList.remove("active");
+      }
+    };
+    document.addEventListener("click", (e) => {
+      if (menu.classList.contains("hidden")) return;
+      if (!menu.contains(e.target) && e.target !== tbIndicators && !tbIndicators.contains(e.target)) {
+        menu.classList.add("hidden"); tbIndicators.classList.remove("active");
+      }
+    });
+    return true;
+  }
+
   const tbEth = $("#tbEth");
   if (tbEth) tbEth.onclick = () => tbEth.classList.toggle("active");
+
+  // ── 2d. drawing rail — decorative single-select highlight ───────────────────
+  document.querySelectorAll("#rail .railbtn").forEach((b) => b.onclick = () => {
+    document.querySelectorAll("#rail .railbtn").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+  });
 
   // ════════════════════════════════════════════════════════════════════════════
   // 3. Zoom-adaptive candle <-> footprint on the main pane.
@@ -154,17 +195,28 @@
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  // 4. Right-edge DOM / volume ladder.
-  //    Resting volume by price over the visible window (footprint cells summed).
-  //    Bars drawn from the right edge; red above the current price (offers),
-  //    green below (bids) — the ATAS DOM convention. Price tags on the right.
+  // 4. DOM / volume ladder — overlaid on pane0's RIGHT PRICE AXIS (ATAS-style).
+  //    Resting volume by price over the visible window (footprint cells summed),
+  //    drawn as horizontal bars anchored to the axis and extending left into the
+  //    chart: red above the current price (offers), green below (bids). The live
+  //    price gets a highlighted tag on the axis. Not a separate column — the
+  //    canvas is an overlay inside the chart wrap, like the footprint/VP layers.
   // ════════════════════════════════════════════════════════════════════════════
-  const domCv = $("#domCanvas");
-  let domData = null, domFetching = false, domLastTf = null;
+  let _domCv = null;
+  function domCanvas() {
+    if (_domCv && _domCv.isConnected) return _domCv;
+    const host = document.querySelector("#pane0 .chartwrap");
+    if (!host) return null;
+    _domCv = document.createElement("canvas");
+    _domCv.className = "overlay dom-overlay";
+    host.appendChild(_domCv);
+    return _domCv;
+  }
+  let domData = null, domFetching = false;
 
   async function domFetch() {
     const p = main();
-    if (!p || !domCv || domFetching || !p.visible()) return;
+    if (!p || domFetching || !p.visible()) return;
     let vr; try { vr = p.chart.timeScale().getVisibleRange(); } catch (_) { return; }
     if (!vr) return;
     domFetching = true;
@@ -173,7 +225,6 @@
       const to = Math.ceil(vr.to) + p.tfSec() * 2;
       const r = await api(`/api/footprint?tf=${p.tf}&from=${from}&to=${to}`);
       if (r && r.ok) {
-        // aggregate cells across the window: price -> {b: buy/ask, s: sell/bid}
         const agg = new Map();
         for (const bar of (r.fp || [])) for (const c of (bar.cells || [])) {
           const pt = Math.round(c.p / 0.25);
@@ -181,23 +232,29 @@
           e.b += c.b; e.s += c.s;
         }
         domData = Array.from(agg.values());
-        domLastTf = p.tf;
         domDraw();
       }
     } catch (_) { /* transient */ }
     domFetching = false;
   }
 
+  function axisWidth(p) {
+    try { const aw = p.chart.priceScale("right").width(); if (aw > 0) return aw; } catch (_) {}
+    return 58;
+  }
+
   function domDraw() {
     const p = main();
-    if (!p || !domCv) return;
-    const { ctx, w, h } = fitCanvas(domCv);
+    const cv = domCanvas();
+    if (!p || !cv) return;
+    const { ctx, w, h } = fitCanvas(cv);
     ctx.clearRect(0, 0, w, h);
     if (!domData || !domData.length) return;
-    // bucket adaptively so rows stay ~constant height (reuse the chart's y map)
     const cur = curPrice();
-    const ys = domData.map((d) => p.candle.priceToCoordinate(d.p));
-    // per-0.25-tick pixel height probe
+    const axisW = axisWidth(p);
+    const plotRight = Math.max(40, w - axisW);          // right edge of the plot area
+    const barMax = Math.min(96, plotRight * 0.42);      // ladder bar reach (px)
+    // adaptive bucketing so rows stay ~constant height (reuse the chart's y map)
     let ppt = 0;
     for (let i = 0; i < domData.length; i++) {
       const y0 = p.candle.priceToCoordinate(domData[i].p);
@@ -205,18 +262,17 @@
       if (y0 != null && y1 != null && Math.abs(y0 - y1) > 0) { ppt = Math.abs(y0 - y1); break; }
     }
     if (ppt <= 0) ppt = 1;
-    const binTicks = Math.max(1, Math.ceil(11 / ppt));
+    const binTicks = Math.max(1, Math.ceil(9 / ppt));
     const rowPx = Math.max(2, binTicks * ppt);
     const bins = new Map();
     for (const d of domData) {
-      const pt = Math.round(d.p / 0.25);
-      const k = Math.floor(pt / binTicks);
-      let e = bins.get(k); if (!e) { e = { k, v: 0, p: d.p }; bins.set(k, e); }
+      const k = Math.floor(Math.round(d.p / 0.25) / binTicks);
+      let e = bins.get(k); if (!e) { e = { k, v: 0 }; bins.set(k, e); }
       e.v += d.b + d.s;
     }
     let maxV = 1;
     for (const e of bins.values()) if (e.v > maxV) maxV = e.v;
-    const barMax = w - 4;
+    const drawNums = rowPx >= 9;
     ctx.font = `9px ${MONO}`;
     ctx.textBaseline = "middle";
     for (const e of bins.values()) {
@@ -227,23 +283,23 @@
       const len = (e.v / maxV) * barMax;
       const above = cur != null && price >= cur;
       ctx.fillStyle = above ? COL.redDim : COL.greenDim;
-      ctx.fillRect(w - len, y - rowPx / 2 + 0.5, len, Math.max(1, rowPx - 1));
-      // value label inside the bar (right-aligned)
-      ctx.fillStyle = above ? "#f0a9b1" : "#9fe6cc";
-      ctx.textAlign = "right";
-      const txt = e.v >= 10000 ? (e.v / 1000).toFixed(0) + "k" : String(e.v);
-      ctx.fillText(txt, w - 3, y);
+      ctx.fillRect(plotRight - len, y - rowPx / 2 + 0.5, len, Math.max(1, rowPx - 1));
+      if (drawNums) {                                   // value at the bar's left end
+        ctx.fillStyle = above ? "#f3b6bd" : "#a7e9d1";
+        ctx.textAlign = "left";
+        const txt = e.v >= 10000 ? (e.v / 1000).toFixed(1) + "k" : String(e.v);
+        ctx.fillText(txt, plotRight - len + 2, y);
+      }
     }
-    // current-price tag
+    // live price tag on the axis
     if (cur != null) {
       const y = p.candle.priceToCoordinate(cur);
       if (y != null) {
-        ctx.fillStyle = "#11161f"; ctx.fillRect(0, y - 7, w, 14);
-        ctx.strokeStyle = COL.magenta; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(w, y + 0.5); ctx.stroke();
+        ctx.fillStyle = COL.magenta;
+        ctx.fillRect(plotRight, y - 8, w - plotRight, 16);
         ctx.fillStyle = "#fff"; ctx.textAlign = "center";
-        ctx.font = `bold 9px ${MONO}`;
-        ctx.fillText(cur.toFixed(2), w / 2, y);
+        ctx.font = `bold 10px ${MONO}`;
+        ctx.fillText(cur.toFixed(2), plotRight + (w - plotRight) / 2, y);
       }
     }
   }
@@ -328,43 +384,58 @@
     }
   }
 
-  function bpDraw() {
-    // Volume — neutral columns, brighter on rising volume
-    drawHistRow(bp.volume, (b) => b.volume,
-      () => COL.vol, { signed: false, labels: true, labelColor: () => COL.muted });
-    // Delta — signed green/red
-    drawHistRow(bp.delta, (b) => (b.delta == null ? 0 : b.delta),
-      (b, v) => (v >= 0 ? COL.greenA : COL.redA),
-      { signed: true, labels: true, labelColor: (b, v) => (v >= 0 ? "#7fdcb8" : "#f0a9b1") });
-    // Session Delta — cumulative; build a running sum then draw signed columns
-    {
-      const p = main();
-      const cv = bp.sess;
-      if (p && cv) {
-        const { ctx, w, h } = fitCanvas(cv);
-        ctx.clearRect(0, 0, w, h);
-        if (bpBars.length) {
-          const ts = p.chart.timeScale();
-          const xs = bpBars.map((b) => ts.timeToCoordinate(b.time));
-          const cw = colWidth(p, xs);
-          const bw = Math.max(1, cw * 0.66);
-          let cum = 0; const cums = bpBars.map((b) => (cum += (b.delta || 0)));
-          let maxAbs = 1; for (const c of cums) if (Math.abs(c) > maxAbs) maxAbs = Math.abs(c);
-          const mid = h / 2, usable = h / 2 - 2;
-          for (let i = 0; i < bpBars.length; i++) {
-            const x = xs[i]; if (x == null) continue;
-            const v = cums[i]; const len = (Math.abs(v) / maxAbs) * usable;
-            ctx.fillStyle = v >= 0 ? COL.greenDim : COL.redDim;
-            if (v >= 0) ctx.fillRect(x - bw / 2, mid - len, bw, len);
-            else ctx.fillRect(x - bw / 2, mid, bw, len);
-          }
-          ctx.strokeStyle = "rgba(120,130,150,.25)"; ctx.lineWidth = 1;
-          ctx.beginPath(); ctx.moveTo(0, mid + 0.5); ctx.lineTo(w, mid + 0.5); ctx.stroke();
-        }
-      }
+  // abbreviate big magnitudes so columns never overflow (signed-safe)
+  function abbr(v) {
+    const a = Math.abs(v), s = v < 0 ? "-" : "";
+    if (a >= 100000) return s + (a / 1000).toFixed(0) + "k";
+    if (a >= 10000) return s + (a / 1000).toFixed(1) + "k";
+    return String(Math.round(v));
+  }
+
+  // Per-bar NUMBER row (ATAS footprint-bottom style): one value per chart column,
+  // x-aligned to the candle above, color by getColor(value). Columns are thinned
+  // out (every Nth) and the font shrinks when they get tight, so the row never
+  // crowds; numbers under the left label are skipped. getVal(bar, index).
+  const LABEL_GUTTER = 62;   // px reserved on the left for the row label
+  function drawNumberRow(cv, getVal, getColor, fmt) {
+    const p = main();
+    if (!p || !cv) return;
+    const { ctx, w, h } = fitCanvas(cv);
+    ctx.clearRect(0, 0, w, h);
+    if (!bpBars.length) return;
+    const ts = p.chart.timeScale();
+    const xs = bpBars.map((b) => ts.timeToCoordinate(b.time));
+    const cw = colWidth(p, xs);
+    // need ~26px of clear width per number; thin to every Nth column otherwise
+    const step = Math.max(1, Math.ceil(26 / cw));
+    const fs = Math.min(11, Math.max(8, Math.round(cw * 0.46)));
+    ctx.font = `${fs}px ${MONO}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const cy = h / 2;
+    for (let i = 0; i < bpBars.length; i += step) {
+      const x = xs[i];
+      if (x == null || x < LABEL_GUTTER || x > w - 2) continue;
+      const v = getVal(bpBars[i], i);
+      ctx.fillStyle = getColor(v);
+      ctx.fillText(fmt(v), x, cy);
     }
-    // DOM Strength (proxy) — signed bar from delta×log(volume); we have no live
-    // depth feed in replay, so this is a flow-imbalance proxy, labeled as such.
+  }
+
+  function bpDraw() {
+    // Volume — neutral numbers (non-negative)
+    drawNumberRow(bp.volume, (b) => b.volume || 0, () => "#9aa6b6", (v) => abbr(v));
+    // Delta — signed numbers, red/green by sign (ATAS coloring)
+    drawNumberRow(bp.delta, (b) => (b.delta == null ? 0 : b.delta),
+      (v) => (v >= 0 ? "#5fcf9f" : "#ef8a93"), (v) => (v > 0 ? "+" : "") + abbr(v));
+    // Session Delta — cumulative running sum, signed numbers, red/green by sign
+    {
+      let cum = 0; const cums = bpBars.map((b) => (cum += (b.delta || 0)));
+      drawNumberRow(bp.sess, (b, i) => cums[i],
+        (v) => (v >= 0 ? "#5fcf9f" : "#ef8a93"), (v) => (v > 0 ? "+" : "") + abbr(v));
+    }
+    // DOM Strength (proxy) — signed bar from delta×volume; replay has no live
+    // depth feed, so this is a flow-imbalance proxy, labeled as such in the UI.
     drawHistRow(bp.domstr, (b) => {
       const d = b.delta == null ? 0 : b.delta;
       return Math.sign(d) * Math.sqrt(Math.abs(d) * Math.max(1, b.volume || 0));
@@ -387,6 +458,7 @@
       p.chart.timeScale().subscribeVisibleLogicalRangeChange(() => { autoFpTick(); redrawAll(); });
     } catch (_) {}
     new ResizeObserver(redrawAll).observe($("#center"));
+    setupIndicatorsMenu();
     syncTfActive(); setFpIndicator();
     return true;
   }

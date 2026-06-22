@@ -112,29 +112,33 @@
   <!-- ── main body: rail | (chart + ladder + bottom panes) | trade panel ───── -->
   <div id="main">
 
-    <!-- 3. left drawing-tools rail -->
-    <nav id="rail" title="Drawing tools">
-      <button class="railbtn" title="Cursor">⌖</button>
-      <button class="railbtn" title="Crosshair">✛</button>
+    <!-- 3. left drawing-tools rail (decorative — visual ATAS clone; the drawing
+         engine is not wired in this build). Cursor is the default highlight. -->
+    <nav id="rail" title="Drawing tools (decorative in this build)">
+      <button class="railbtn active" title="Cursor">↖</button>
+      <button class="railbtn" title="Crosshair">+</button>
+      <span class="rail-sp"></span>
       <button class="railbtn" title="Trend line">╱</button>
-      <button class="railbtn" title="Horizontal line">─</button>
-      <button class="railbtn" title="Ray">↗</button>
-      <button class="railbtn" title="Fib retracement">𝑓</button>
+      <button class="railbtn" title="Horizontal line">━</button>
+      <button class="railbtn" title="Ray">∕</button>
+      <button class="railbtn" title="Fib retracement">ƒ</button>
+      <span class="rail-sp"></span>
       <button class="railbtn" title="Rectangle">▭</button>
       <button class="railbtn" title="Text">T</button>
-      <button class="railbtn" title="Measure">⊿</button>
+      <button class="railbtn" title="Measure">∟</button>
       <button class="railbtn" title="Brush">✎</button>
-      <button class="railbtn" title="Magnet">🧲</button>
       <span class="rail-sp"></span>
-      <button class="railbtn" title="Lock drawings">🔒</button>
-      <button class="railbtn" title="Hide drawings">👁</button>
-      <button class="railbtn" title="Remove drawings">🗑</button>
+      <button class="railbtn" title="Magnet">◰</button>
+      <button class="railbtn" title="Lock drawings">⊟</button>
+      <button class="railbtn" title="Hide / remove drawings">⌫</button>
     </nav>
 
     <!-- center column: chart row (panes + DOM ladder) over the bottom panes -->
     <section id="center">
       <div id="chartRow">
-        <!-- chart panes (built by app.js). pane1 = left context, pane0 = main -->
+        <!-- chart panes (built by app.js). pane1 = left context, pane0 = main.
+             The DOM/volume ladder is drawn as an overlay on the right price axis
+             of pane0 by atas-ui.js (ATAS-style), not a separate column. -->
         <section id="panes" class="single">
           <div class="pane hidden" id="pane1"></div>
           <div class="pane" id="pane0"></div>
@@ -142,12 +146,6 @@
           <div id="chbanner" class="chbanner hidden"></div>
           <div id="toast" class="toast hidden"></div>
         </section>
-
-        <!-- 6. right-edge DOM / volume ladder -->
-        <aside id="domLadder">
-          <div class="dom-cap">DOM</div>
-          <canvas id="domCanvas"></canvas>
-        </aside>
       </div>
 
       <!-- 7. bottom panes: DOM Strength + Volume / Delta / Session Delta -->
