@@ -906,6 +906,48 @@ function makePane(idx, host, defaults) {
         color: COL.gold, lineStyle: 2, lineWidth: 2, axisLabelVisible: true, title: "trail" }));
   };
 
+  // ---- live current-price dashed line ----
+  // A subtle dashed horizontal line at the latest replay price, spanning the
+  // whole pane and re-priced every poll. Visual aid only — no order semantics.
+  p.curPriceLine = null;
+  p.drawCurPrice = (price) => {
+    if (price === null || price === undefined || !isFinite(price)) {
+      if (p.curPriceLine) { candle.removePriceLine(p.curPriceLine); p.curPriceLine = null; }
+      return;
+    }
+    if (!p.curPriceLine) {
+      p.curPriceLine = candle.createPriceLine({
+        price, color: "rgba(150,162,180,.55)", lineStyle: 2, lineWidth: 1,
+        axisLabelVisible: false, title: "",
+      });
+    } else {
+      p.curPriceLine.applyOptions({ price });
+    }
+  };
+
+  // ---- AUTO-trade entry/exit markers ----
+  // Drawn from the snapshot's closed-trade list (auto trades only), snapped to
+  // the pane's current TF bucket so lightweight-charts anchors them on a bar.
+  p.autoMarkerKey = null;
+  p.drawAutoMarkers = (mk) => {
+    const auto = mk || [];
+    const key = p.tf + "|" + auto.length;
+    if (key === p.autoMarkerKey) return;   // no change -> no churn
+    p.autoMarkerKey = key;
+    const tf = p.tfSec();
+    const bucket = (st) => Math.floor(st / tf) * tf;
+    const ms = [];
+    for (const t of auto) {
+      ms.push({ time: bucket(t.e), position: "belowBar",
+        color: COL.green, shape: "arrowUp", text: "L" });
+      ms.push({ time: bucket(t.x), position: "aboveBar",
+        color: t.p >= 0 ? COL.blueLight : COL.red, shape: "arrowDown",
+        text: (t.p >= 0 ? "+" : "") + Math.round(t.p) });
+    }
+    ms.sort((a, b) => a.time - b.time);
+    try { candle.setMarkers(ms); } catch (_) { /* series not ready */ }
+  };
+
   // ---- per-pane zoom persistence ----
   // The pane's barSpacing belongs to the USER: sync never rewrites it, and it
   // survives reloads. Saved debounced on any logical-range change (zoom/scroll).
@@ -1048,9 +1090,17 @@ function renderState(s) {
   $("#prog").textContent = (s.progress_pct ?? 0) + "%";
   $("#btnPlay").textContent = s.paused ? "▶ Play" : "⏸ Pause";
   $("#paused-badge").classList.toggle("hidden", !s.paused || ended);
-  // position
+  // auto/manual mode UI (BETA)
+  renderMode(s);
+  // position + live current-price line + auto-trade markers
   const pb = $("#posbody");
-  for (const p of panes) p.drawPosLines(s.position && p.visible() ? s.position : null);
+  for (const p of panes) {
+    p.drawPosLines(s.position && p.visible() ? s.position : null);
+    if (p.visible()) {
+      p.drawCurPrice(s.cur_price);
+      p.drawAutoMarkers(s.auto_markers);
+    }
+  }
   if (s.position) {
     const p = s.position;
     const cls = p.side === "LONG" ? "pos-long" : "pos-short";
@@ -1251,6 +1301,7 @@ $("#qtyMinus").onclick = () => { $("#lots").value = Math.max(1, (+$("#lots").val
 $("#qtyPlus").onclick = () => { $("#lots").value = Math.max(1, (+$("#lots").value || 1) + 1); };
 
 async function doOrder(side) {
+  if (autoOn) { toast("AUTO mode is on — manual trading disabled"); return; }
   const size = Math.max(1, +$("#lots").value || 1);
   const stop_tk = $("#stop").value === "" ? null : +$("#stop").value;
   const target_tk = $("#target").value === "" ? null : +$("#target").value;
@@ -1290,6 +1341,42 @@ $("#btnChallenge").onclick = () => {
            : "Prop Challenge off for the next session");
 };
 setChallengePref(challengePref());
+
+// ── AUTO / MANUAL trading mode (BETA) ──────────────────────────────────────────
+// MANUAL = hand-trade with B/S/F. AUTO = the engine trades the locked VP-Reversion
+// LONG strategy by itself as the tape replays, feeding the SAME P&L / scoreboard.
+// The server is authoritative; the client only toggles + mirrors snapshot state.
+let autoOn = false;
+const btnMode = $("#btnMode");
+const vaInput = $("#vaPct");
+
+function renderMode(s) {
+  if (!s) return;
+  autoOn = !!s.auto_mode;
+  if (btnMode) {
+    btnMode.textContent = autoOn ? "AUTO" : "MANUAL";
+    btnMode.classList.toggle("auto", autoOn);
+    btnMode.title = autoOn
+      ? "AUTO mode ON — engine is trading the VP-Reversion LONG. Click for MANUAL."
+      : "MANUAL mode — you trade by hand (B/S/F). Click for AUTO.";
+  }
+  $("#side").classList.toggle("auto-locked", autoOn);
+  const armed = $("#autoArmed");
+  if (armed) armed.classList.toggle("hidden", !(autoOn && s.auto_armed));
+  if (vaInput && document.activeElement !== vaInput && s.va_pct != null)
+    vaInput.value = Math.round(s.va_pct);
+}
+
+if (btnMode) btnMode.onclick = async () => {
+  const r = await post("/api/control", { action: "auto_mode", on: !autoOn });
+  if (r && r.ok === false && r.err) toast(r.err);   // e.g. "flatten the manual position first"
+  renderState(r);
+  poll();
+};
+if (vaInput) vaInput.addEventListener("change", async () => {
+  const r = await post("/api/control", { action: "va", va: +vaInput.value || 70 });
+  renderState(r);
+});
 
 $("#btnNew").onclick = () => newSession();
 $("#modalNew").onclick = () => { $("#overlay").classList.add("hidden"); newSession(); };

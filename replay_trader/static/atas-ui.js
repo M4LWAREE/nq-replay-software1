@@ -152,12 +152,6 @@
   const tbEth = $("#tbEth");
   if (tbEth) tbEth.onclick = () => tbEth.classList.toggle("active");
 
-  // ── 2d. drawing rail — decorative single-select highlight ───────────────────
-  document.querySelectorAll("#rail .railbtn").forEach((b) => b.onclick = () => {
-    document.querySelectorAll("#rail .railbtn").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active");
-  });
-
   // ════════════════════════════════════════════════════════════════════════════
   // 3. Zoom-adaptive candle <-> footprint on the main pane.
   //    Zoomed in  (wide bars) -> footprint clusters; zoomed out -> plain candles.

@@ -378,6 +378,56 @@ def _profile_stats(levels, rows, va_pct):
             "total": total, "price_hi": prices[-1], "price_lo": prices[0]}
 
 
+# ── AUTO strategy: VP Reversion to Daily POC — LONG reclaim (vp_rev_long_reclaim) ─
+# Ported EXACTLY from cortex backtests/strategies/vp_reversion_poc/iterate_long2.py
+# (the locked config: +$3,910 / 125 days NQ · PF 1.47). LONG only, 10:00-11:00 ET.
+# These volume-by-price helpers mirror cortex.backtest.tickbt.vbp_* so the replay
+# engine reproduces the validated trades from the SAME integer-tick histogram math.
+AUTO_STOP_TICKS = 50          # fixed protective stop (cortex STOP=50)
+AUTO_VA_DEFAULT = 70.0        # value-area % (exposed as a setting; 41 is a candidate)
+_NS_MIN = 60_000_000_000
+
+
+def _vbp_counts(px_ticks, sz):
+    """(base_tick, counts[]) — total size at each integer-tick price. None if empty."""
+    px = np.asarray(px_ticks)
+    if px.size == 0:
+        return None, None
+    lo = int(px.min())
+    counts = np.bincount(px - lo, weights=np.asarray(sz, dtype=np.float64))
+    return lo, counts
+
+
+def _vbp_poc(px_ticks, sz):
+    """Point of control (integer-tick price with max traded volume). None if empty."""
+    lo, counts = _vbp_counts(px_ticks, sz)
+    if lo is None:
+        return None
+    return int(lo + int(counts.argmax()))
+
+
+def _vbp_value_area(px_ticks, sz, va_pct=70.0):
+    """(poc, vah, val) in ticks — value area = va_pct% of volume grown outward from
+    the POC (single-row expansion toward the heavier neighbour). cortex-identical."""
+    lo, counts = _vbp_counts(px_ticks, sz)
+    if lo is None:
+        return None, None, None
+    total = counts.sum()
+    poc_i = int(counts.argmax())
+    target = total * va_pct / 100.0
+    cum = counts[poc_i]
+    a = b = poc_i
+    last = len(counts) - 1
+    while cum < target and (a > 0 or b < last):
+        below = counts[a - 1] if a > 0 else -1.0
+        above = counts[b + 1] if b < last else -1.0
+        if above >= below:
+            b += 1; cum += counts[b]
+        else:
+            a -= 1; cum += counts[a]
+    return int(lo + poc_i), int(lo + b), int(lo + a)   # poc, vah, val
+
+
 # ── the replay session ───────────────────────────────────────────────────────
 class ReplaySession:
     """Server-authoritative replay state. One active session at a time.
@@ -444,6 +494,19 @@ class ReplaySession:
         # trading state
         self.position = None        # dict or None
         self.pending = None         # market order awaiting next-print fill
+
+        # ── AUTO mode (engine trades vp_rev_long_reclaim by itself) ──────────────
+        # When auto_mode is on and the position is flat, the tape walks tick-by-tick
+        # so the strategy can detect setups + reclaim fills with no look-ahead.
+        self.auto_mode = False
+        self.va_pct = AUTO_VA_DEFAULT          # value-area % (settable; 41 candidate)
+        self.auto_armed = None                 # armed reclaim buy-stop, or None
+        self.auto_busy_until_ns = -1           # one position at a time (cortex `busy`)
+        self._auto_prepared = False
+        self._rth_open_idx = None              # 9:30 ET anchor index (developing daily VP)
+        self._auto_closes = []                 # 15-min setup-candle close ns (10:00..11:00)
+        self._auto_end11_ns = None             # 11:00 ET — reclaim cutoff
+        self._auto_eval_idx = 0                # pointer into _auto_closes
 
         # prop-challenge state (None unless enabled via enable_challenge)
         self.challenge = False
@@ -611,13 +674,21 @@ class ReplaySession:
             target = min(target, self.end_idx)
             if target <= self.cursor:
                 return
-            if self.position is None and self.pending is None:
-                # nothing to resolve — jump
-                self.cursor = target
-            else:
-                self._walk(target)
+            self._advance_cursor_to(target)
             if self.cursor >= self.end_idx:
                 self._end_session()
+
+    def _advance_cursor_to(self, target):
+        """Route a cursor advance: walk tick-by-tick when a position/pending must
+        resolve, or when AUTO mode needs to hunt setups/fills; otherwise jump."""
+        if target <= self.cursor:
+            return
+        if self.position is not None or self.pending is not None:
+            self._walk(target)
+        elif self.auto_mode:
+            self._auto_walk(target)
+        else:
+            self.cursor = target
 
     def _walk(self, target):
         """Walk ticks [cursor, target) one at a time, resolving fills/exits."""
@@ -663,6 +734,10 @@ class ReplaySession:
 
     def _check_exit(self, i, px, ns):
         pos = self.position; side = pos["side"]
+        # AUTO trades resolve slip-free so the engine reproduces the cortex backtest
+        # exits exactly (cortex stop = breaching tick, target = level); manual trades
+        # keep the honest adverse slip.
+        slip = 0 if pos.get("auto") else self.slip_tk
         # MFE/MAE in ticks (favorable/adverse excursion of price vs entry)
         exc = (px - pos["entry_px"]) * side
         if exc > pos["mfe"]:
@@ -702,19 +777,152 @@ class ReplaySession:
             if pos["target"] is not None and px >= pos["target"]:
                 self._close(i, pos["target"], ns, "TARGET"); return
             if eff is not None and px <= eff:
-                self._close(i, px - self.slip_tk, ns,
+                self._close(i, px - slip, ns,
                             "TRAIL" if eff_is_trail else "STOP"); return
         else:
             if pos["target"] is not None and px <= pos["target"]:
                 self._close(i, pos["target"], ns, "TARGET"); return
             if eff is not None and px >= eff:
-                self._close(i, px + self.slip_tk, ns,
+                self._close(i, px + slip, ns,
                             "TRAIL" if eff_is_trail else "STOP"); return
         # prop challenge: REAL-TIME equity mark + MLL check on every surviving
         # print (protective exits, being resting orders, resolve first; a
         # closed trade is re-checked on the realized side in _ch_on_close)
         if self.challenge:
             self._ch_tick(i, px, ns)
+
+    # ── AUTO strategy: VP Reversion to Daily POC — LONG reclaim ──────────────────
+    def _sidx(self, ns):
+        """First in-session tick index with TS >= ns (cortex idx(), 'left')."""
+        return int(np.searchsorted(TS[self.start_idx:self.end_idx], ns, "left")) + self.start_idx
+
+    def _auto_prepare(self):
+        """Resolve the 9:30 ET developing-profile anchor and the 15-min setup-candle
+        closes (10:00..11:00 ET) for this session day. Lazy + once per session."""
+        if self._auto_prepared:
+            return
+        et0 = pd.Timestamp(int(TS[self.start_idx]), tz="UTC").tz_convert(ET).normalize()
+
+        def ns_at(hh, mm):
+            return int((et0 + pd.Timedelta(hours=hh, minutes=mm)).tz_convert("UTC").value)
+
+        self._rth_open_idx = self._sidx(ns_at(9, 30))
+        self._auto_end11_ns = ns_at(11, 0)
+        self._auto_closes = [ns_at(10, 0), ns_at(10, 15), ns_at(10, 30),
+                             ns_at(10, 45), ns_at(11, 0)]
+        self._auto_eval_idx = 0
+        self._auto_prepared = True
+
+    def _auto_walk(self, target):
+        """Flat + AUTO: walk ticks [cursor, target) hunting vp_rev_long_reclaim
+        setups and reclaim fills (no look-ahead — only ticks < cursor are 'seen').
+        On a fill the open position is handed to the normal _walk exit engine."""
+        self._auto_prepare()
+        closes = self._auto_closes
+        i = self.cursor
+        while i < target:
+            ns = int(TS[i]); px = int(PX[i])
+            # 1) evaluate a setup as the cursor first crosses each 15-min close
+            if (self.auto_armed is None and self._auto_eval_idx < len(closes)
+                    and ns >= closes[self._auto_eval_idx]):
+                close_ns = closes[self._auto_eval_idx]
+                self._auto_eval_idx += 1
+                genuine = (i == self.start_idx) or (int(TS[i - 1]) < close_ns)
+                if genuine and self.auto_busy_until_ns < close_ns:
+                    self._auto_try_arm(i, close_ns)
+            # 2) manage an armed reclaim buy-stop on this print
+            if self.auto_armed is not None:
+                a = self.auto_armed
+                if ns >= a["expiry_ns"]:
+                    self.auto_armed = None
+                elif px <= a["cancel"]:          # flushed past the prospective stop
+                    self.auto_armed = None
+                elif px >= a["val"]:             # reclaimed VAL -> fill at this tick
+                    if self._auto_open_long(i, px, ns):
+                        self.cursor = i + 1
+                        self._walk(target)        # manage the exit through the window
+                        return
+            i += 1
+        self.cursor = target
+
+    def _auto_try_arm(self, c, close_ns):
+        """At a 15-min close, test the LONG setup on data up to the close and, if it
+        qualifies, arm a reclaim buy-stop at VAL (cancel at VAL-stop, expiry 11:00).
+        Mirrors iterate_long2.run_day exactly (VA from self.va_pct)."""
+        d0 = self._rth_open_idx
+        if c <= d0 + 5 or c >= self.end_idx:
+            return
+        poc_d, vah, val = _vbp_value_area(PX[d0:c], SZ[d0:c], self.va_pct)
+        if val is None:
+            return
+        s_c = self._sidx(close_ns - 15 * _NS_MIN)      # setup 15-min candle [close-15m, close)
+        if c - s_c < 3:
+            return
+        c_lo = int(np.asarray(PX[s_c:c]).min())
+        poc_c = _vbp_poc(PX[s_c:c], SZ[s_c:c])
+        s30 = self._sidx(close_ns - 30 * _NS_MIN)      # trailing 30-min profile
+        poc_30 = _vbp_poc(PX[s30:c], SZ[s30:c])
+        if poc_c is None or poc_30 is None:
+            return
+        # LONG: candle low pokes below VAL, both POCs confirm inside value (>= VAL)
+        if not (c_lo < val and poc_c >= val and poc_30 >= val):
+            return
+        self.auto_armed = {"val": int(val), "cancel": int(val) - AUTO_STOP_TICKS,
+                           "poc_c": int(poc_c), "poc_d": int(poc_d), "vah": int(vah),
+                           "expiry_ns": self._auto_end11_ns, "close_ns": int(close_ns)}
+        self._log_event("AUTO_ARM", side=1, ns=int(close_ns), idx=c)
+
+    def _auto_open_long(self, i, entry, ns):
+        """Open the LONG at the reclaim tick (slip-free), stop = entry-50, target =
+        setup-candle POC. No-room gate: skip if the reclaim gapped at/above the POC.
+        Returns True if a position was opened."""
+        a = self.auto_armed
+        if a is None:
+            return False
+        poc_c = a["poc_c"]
+        if poc_c <= entry:                     # no reversion room -> stand down
+            self.auto_armed = None
+            return False
+        oid = self.next_order_id; self.next_order_id += 1
+        self.position = {
+            "order_id": oid, "side": 1, "size": 1,
+            "entry_idx": i, "entry_ns": ns, "entry_px": entry,
+            "stop": entry - AUTO_STOP_TICKS, "target": poc_c,
+            "stop_tk": AUTO_STOP_TICKS, "target_tk": int(poc_c - entry),
+            "trail_tk": None, "arm_tk": 0, "trail_armed": False, "trail_stop": None,
+            "mfe": 0, "mae": 0,
+            "instrument": self.instrument, "cmult": self.cmult, "comm_rt": self.comm_rt,
+            "flow_delta_entry": self._flow_delta(i + 1, ns),
+            "auto": True,
+        }
+        self.auto_armed = None
+        self._log_event("AUTO_ENTRY", side=1, size=1, px=entry, ns=ns, idx=i)
+        return True
+
+    def set_auto_mode(self, on):
+        """Toggle AUTO (engine trades the strategy) vs MANUAL (Diego trades by hand).
+        Refuses to enable AUTO while a MANUAL position/order is live (flatten first)."""
+        with self.lock:
+            on = bool(on)
+            if on and not self.auto_mode:
+                manual_live = ((self.position is not None and not self.position.get("auto"))
+                               or self.pending is not None)
+                if manual_live:
+                    return {"ok": False, "err": "flatten the manual position first to enable AUTO"}
+            self.auto_mode = on
+            if not on:
+                self.auto_armed = None         # disarm any pending reclaim buy-stop
+            return {"ok": True, "auto_mode": on}
+
+    def set_va(self, pct):
+        """Set the value-area % used by the AUTO strategy (70 locked; 41 candidate)."""
+        with self.lock:
+            try:
+                v = float(pct)
+            except (TypeError, ValueError):
+                return {"ok": False, "err": "bad value-area %"}
+            self.va_pct = min(95.0, max(5.0, v))
+            return {"ok": True, "va_pct": self.va_pct}
 
     def set_instrument(self, name):
         name = "micro" if str(name).lower().startswith("micro") else "mini"
@@ -832,6 +1040,9 @@ class ReplaySession:
 
     def _close(self, i, exit_px, ns, reason):
         pos = self.position; self.position = None
+        # AUTO: one position at a time — no new setup arms until after this exit
+        if pos.get("auto"):
+            self.auto_busy_until_ns = ns
         side = pos["side"]; size = pos["size"]
         # economics locked at entry (fall back to live values for legacy positions)
         cm = pos.get("cmult", self.cmult)
@@ -851,6 +1062,9 @@ class ReplaySession:
             "size": size, "entry_idx": pos["entry_idx"], "exit_idx": i,
             "entry_ns": pos["entry_ns"], "exit_ns": ns,
             "entry_et": self.et_clock(pos["entry_ns"]), "exit_et": self.et_clock(ns),
+            "entry_synth": self.synth_time(pos["entry_ns"]),
+            "exit_synth": self.synth_time(ns),
+            "auto": bool(pos.get("auto")),
             "entry_px_disp": round(self.disp_px(pos["entry_px"]), 2),
             "exit_px_disp": round(self.disp_px(exit_px), 2),
             "exit_reason": reason, "pnl_ticks": round(pnl_ticks, 2),
@@ -969,6 +1183,8 @@ class ReplaySession:
         with self.lock:
             if self.ended:
                 return {"ok": False, "err": "session ended"}
+            if self.auto_mode:
+                return {"ok": False, "err": "AUTO mode is on — manual trading disabled"}
             if self.position is not None or self.pending is not None:
                 return {"ok": False, "err": "one position at a time"}
             size = max(1, int(size))
@@ -1079,10 +1295,7 @@ class ReplaySession:
                                          self.replay_now_ns, side="right")) + self.start_idx
             target = min(target, self.end_idx)
             if target > self.cursor:
-                if self.position is None and self.pending is None:
-                    self.cursor = target
-                else:
-                    self._walk(target)
+                self._advance_cursor_to(target)
             if self.cursor >= self.end_idx:
                 self._end_session()
 
@@ -1114,10 +1327,7 @@ class ReplaySession:
                                          self.replay_now_ns, side="right")) + self.start_idx
             target = min(target, self.end_idx)
             if target > self.cursor:
-                if self.position is None and self.pending is None:
-                    self.cursor = target
-                else:
-                    self._walk(target)
+                self._advance_cursor_to(target)
             if self.cursor >= self.end_idx:
                 self._end_session()
                 return
@@ -1355,6 +1565,7 @@ class ReplaySession:
                     "trail_stop": trail_disp,
                     "mfe": round(p["mfe"], 1), "mae": round(p["mae"], 1),
                     "open_pnl": open_pnl, "open_pnl_ticks": round(pnl_ticks, 1),
+                    "auto": bool(p.get("auto")),
                 }
             pct = 0.0
             span = self.end_idx - self.start_idx
@@ -1370,6 +1581,13 @@ class ReplaySession:
                 "instrument": self.instrument,
                 "tick_value": round(TICK_VALUE * self.cmult, 4),
                 "position": pos_view, "stats": self.stats(),
+                "auto_mode": self.auto_mode, "va_pct": self.va_pct,
+                "auto_armed": self.auto_armed is not None,
+                # compact entry/exit markers for AUTO trades (drawn on the chart)
+                "auto_markers": [
+                    {"e": t["entry_synth"], "x": t["exit_synth"], "p": t["pnl_net"]}
+                    for t in self.trades if t.get("auto")
+                ],
                 "flow_thresh": FLOW_THRESH,
                 "open_heat_quiet": OPEN_HEAT_QUIET, "open_heat_hot": OPEN_HEAT_HOT,
             }
@@ -1569,6 +1787,15 @@ def new_session():
             instr = prev.instrument
         if instr:
             s.set_instrument(instr)
+        # AUTO-mode continuity: carry the value-area % forward, and resume AUTO if
+        # the previous session was running the engine (matches instrument carry-over
+        # so flipping VA / new days never silently drops back to MANUAL).
+        if prev is not None:
+            s.set_va(prev.va_pct)
+            if prev.auto_mode:
+                s.set_auto_mode(True)
+        if body.get("va") is not None:
+            s.set_va(body.get("va"))
         # prop challenge: per-session opt-in, OFF by default (client sends the
         # persisted preference; one replay session = one challenge attempt)
         if body.get("challenge"):
@@ -1687,6 +1914,14 @@ def control():
         s.jump_to_close()
     elif act == "instrument":
         s.set_instrument(b.get("instrument", "mini"))
+    elif act == "auto_mode":
+        # AUTO = engine trades vp_rev_long_reclaim by itself; MANUAL = hand trading.
+        r = s.set_auto_mode(b.get("on", True))
+        return jsonify({**r, **s.snapshot()})
+    elif act == "va":
+        # value-area % for the AUTO strategy (70 locked; 41 candidate)
+        r = s.set_va(b.get("va", AUTO_VA_DEFAULT))
+        return jsonify({**r, **s.snapshot()})
     return jsonify({"ok": True, **s.snapshot()})
 
 

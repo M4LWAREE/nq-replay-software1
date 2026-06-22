@@ -60,6 +60,18 @@
       <button id="btnJump" class="tbbtn">+5m</button>
       <button id="btnClose" class="tbbtn" title="Jump to :59 of the current 1-min bar, then pause (key 9)">→:59</button>
     </div>
+    <span class="tbsep"></span>
+
+    <!-- AUTO / MANUAL trading mode (BETA) — MANUAL = hand-trade with B/S/F;
+         AUTO = the engine trades the locked VP-Reversion LONG by itself as the
+         tape replays, feeding the same P&L / scoreboard. -->
+    <div class="grp mode-grp" title="Trading mode (BETA)">
+      <button id="btnMode" class="tbbtn" title="MANUAL = you trade by hand (B/S/F). AUTO = the engine trades the VP-Reversion LONG strategy by itself.">MANUAL</button>
+      <span id="autoArmed" class="auto-armed hidden" title="A reclaim setup is armed — waiting for price to reclaim VAL">● armed</span>
+      <label class="va-wrap" title="Value-area % for the AUTO strategy (70 = locked config; 41 = candidate).">VA%
+        <input id="vaPct" type="number" min="5" max="95" step="1" value="70"/>
+      </label>
+    </div>
 
     <!-- readout cluster -->
     <div class="grp readout">
@@ -109,29 +121,8 @@
     <span class="ch-item muted" id="chLock"></span>
   </div>
 
-  <!-- ── main body: rail | (chart + ladder + bottom panes) | trade panel ───── -->
+  <!-- ── main body: (chart + ladder + bottom panes) | trade panel ──────────── -->
   <div id="main">
-
-    <!-- 3. left drawing-tools rail (decorative — visual ATAS clone; the drawing
-         engine is not wired in this build). Cursor is the default highlight. -->
-    <nav id="rail" title="Drawing tools (decorative in this build)">
-      <button class="railbtn active" title="Cursor">↖</button>
-      <button class="railbtn" title="Crosshair">+</button>
-      <span class="rail-sp"></span>
-      <button class="railbtn" title="Trend line">╱</button>
-      <button class="railbtn" title="Horizontal line">━</button>
-      <button class="railbtn" title="Ray">∕</button>
-      <button class="railbtn" title="Fib retracement">ƒ</button>
-      <span class="rail-sp"></span>
-      <button class="railbtn" title="Rectangle">▭</button>
-      <button class="railbtn" title="Text">T</button>
-      <button class="railbtn" title="Measure">∟</button>
-      <button class="railbtn" title="Brush">✎</button>
-      <span class="rail-sp"></span>
-      <button class="railbtn" title="Magnet">◰</button>
-      <button class="railbtn" title="Lock drawings">⊟</button>
-      <button class="railbtn" title="Hide / remove drawings">⌫</button>
-    </nav>
 
     <!-- center column: chart row (panes + DOM ladder) over the bottom panes -->
     <section id="center">

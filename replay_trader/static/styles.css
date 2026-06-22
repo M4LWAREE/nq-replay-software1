@@ -123,15 +123,18 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
 /* ── main body ─────────────────────────────────────────────────────────────── */
 #main{display:flex;flex:1;min-height:0}
 
-/* 3. left drawing rail */
-#rail{display:flex;flex-direction:column;align-items:center;gap:2px;width:34px;
-  flex:0 0 34px;background:var(--rail);border-right:1px solid #000;padding:5px 0;overflow:hidden}
-.railbtn{width:26px;height:26px;background:transparent;color:var(--muted);
-  border:1px solid transparent;border-radius:4px;cursor:pointer;font-size:13px;
-  display:flex;align-items:center;justify-content:center}
-.railbtn:hover{color:var(--fg2);background:var(--panel3)}
-.railbtn.active{color:var(--blue);background:var(--blue-soft)}
-.rail-sp{height:8px;width:18px;border-top:1px solid var(--line);margin:4px 0}
+/* AUTO / MANUAL trading-mode toggle (BETA) */
+.mode-grp{gap:6px}
+#btnMode{min-width:74px;font-weight:600;letter-spacing:.3px}
+#btnMode.auto{background:var(--gold);border-color:var(--gold);color:#1b1300}
+.auto-armed{font-size:10px;color:var(--gold);font-weight:600;white-space:nowrap}
+.auto-armed.hidden{display:none}
+.va-wrap{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--muted)}
+.va-wrap input{width:42px;background:#161b25;color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;padding:3px 4px;font-size:11px}
+/* manual order buttons read as disabled while AUTO drives the tape */
+#side.auto-locked .big.buy,#side.auto-locked .big.sell,
+#side.auto-locked .big.flat,#side.auto-locked #btnApply{opacity:.4;pointer-events:none}
 
 /* center column = chart row stacked over bottom panes */
 #center{display:flex;flex-direction:column;flex:1;min-width:0}
