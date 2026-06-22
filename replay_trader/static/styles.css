@@ -1,83 +1,161 @@
-/* DeepCharts (Volumetrica) theme — palette sampled from
-   reference/deepcharts_ui_reference.png:
-   chart bg #121212 · axis bg #0a0a0a · toolbar #262626 · buy green #00d301
-   sell red #ff001a · delta purple #612499/#8e3ae3 · profile blue #2c7fff
-   light blue #99d9ea · POC magenta #e9077e · gold #f1b100 · vwap orange #cb9603 */
+/* ATAS X-style theme for Replay Trader.
+   Palette sampled from reference/atas_x_candles.png · atas_x_footprint.png ·
+   atas_x_settings.png — dark navy chrome, blue accent, teal-green / salmon-red
+   order flow. This is a front-end reskin only: every id/class the engine's
+   app.js binds to is preserved; new ATAS chrome (tab bar, rail, DOM ladder,
+   bottom panes, TF config) is layered on top. */
 :root{
-  --bg:#0a0a0a; --chart:#121212; --toolbar:#262626; --panel:#1a1a1a; --panel2:#222222;
-  --line:#383838; --line2:#2b2b2b;
-  --fg:#e0e0e0; --muted:#9a9a9a;
-  --green:#00d301; --red:#ff001a; --purple:#8e3ae3; --purple-deep:#612499;
-  --blue:#2c7fff; --blue-light:#99d9ea; --gold:#f1b100; --magenta:#e9077e;
-  --orange:#cb9603; --accent:#2c7fff;
+  --bg:#0a0d12;          /* app / chart gutter (near-black navy) */
+  --chart:#0e1218;       /* chart canvas bg */
+  --tabbar:#0c0f15;      /* instrument tab strip */
+  --toolbar:#12161f;     /* top toolbar */
+  --rail:#0c0f15;        /* left drawing rail */
+  --panel:#0f131a;       /* side panel bg */
+  --panel2:#141922;      /* cards / raised surfaces */
+  --panel3:#1a2029;      /* hover / active fill */
+  --line:#222a36;        /* primary border */
+  --line2:#171d26;       /* faint border */
+  --fg:#c7cedb;          /* primary text */
+  --fg2:#e6ebf2;         /* bright text */
+  --muted:#69727f;       /* muted/labels */
+  --blue:#2f6fed;        /* ATAS accent (apply / active / close) */
+  --blue-d:#1f4fc0;
+  --blue-soft:#16335f;
+  --green:#1eb87f;       /* bull / buy */
+  --green-bar:#1f9e6b;
+  --red:#e24556;         /* bear / sell */
+  --red-bar:#c43d4e;
+  --gold:#e3a008;
+  --magenta:#d6418f;     /* POC */
+  --purple:#8e3ae3;
+  --orange:#cb9603;
+  --profile:#2f6fed;     /* volume profile blue */
+  --blue-light:#8fb6ff;
+  --accent:var(--blue);
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
-  font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:13px}
-#app{display:flex;flex-direction:column;height:100vh}
+  font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:12px}
+#app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.lbl{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.4px}
+.val{font-variant-numeric:tabular-nums;font-weight:600;min-width:54px;display:inline-block}
+.muted{color:var(--muted)}
+.hidden{display:none !important}
+.pos{color:var(--green)} .neg{color:var(--red)}
 
-/* top bar — flat Volumetrica toolbar */
-#topbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
-  padding:5px 10px;background:var(--toolbar);border-bottom:1px solid #000}
-.grp{display:flex;align-items:center;gap:5px}
+/* ── 1. instrument tab bar ─────────────────────────────────────────────────── */
+#tabbar{display:flex;align-items:stretch;gap:2px;height:30px;
+  background:var(--tabbar);border-bottom:1px solid #000;padding:0 4px;flex:0 0 auto}
+.itab{display:flex;align-items:center;gap:8px;padding:0 12px;cursor:pointer;
+  background:#11151d;color:var(--muted);font-size:12px;font-weight:600;
+  border:1px solid transparent;border-bottom:none;margin-top:4px;border-radius:4px 4px 0 0}
+.itab:hover{color:var(--fg)}
+.itab.active{background:var(--chart);color:var(--fg2);
+  border-color:var(--line);box-shadow:inset 0 2px 0 var(--blue)}
+.itab-x{color:var(--muted);font-size:13px;line-height:1}
+.itab-x:hover{color:var(--red)}
+.itab-add{align-self:center;width:22px;height:22px;margin-left:4px;border-radius:4px;
+  background:#11151d;color:var(--muted);border:1px solid var(--line);
+  cursor:pointer;font-size:15px;line-height:1}
+.itab-add:hover{color:var(--fg2);border-color:#3a4554}
+
+/* ── 2. top toolbar ────────────────────────────────────────────────────────── */
+#topbar{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;overflow:hidden;
+  height:38px;padding:0 8px;background:var(--toolbar);border-bottom:1px solid #000;flex:0 0 auto}
+.grp{display:flex;align-items:center;gap:4px}
 .grp.right{margin-left:auto}
-.brand{font-weight:700;letter-spacing:1px;color:var(--fg);font-size:12px}
-.brand-sym{color:var(--green);margin-right:4px}
-.lbl{color:var(--muted);font-size:11px;text-transform:uppercase}
-.val{font-variant-numeric:tabular-nums;font-weight:600;min-width:62px;display:inline-block}
-.seps{width:1px;height:18px;background:var(--line);margin:0 2px}
+.tbsep{width:1px;height:20px;background:var(--line);margin:0 3px;flex:0 0 auto}
 
-.ctl{background:var(--toolbar);color:var(--fg);border:1px solid var(--line);
-  border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600}
-.ctl:hover{border-color:#5a5a5a;background:#2e2e2e}
-.ctl.active,.spd.active,.tf.active{background:var(--accent);border-color:var(--accent);color:#fff}
-.ctl.alt{border-color:var(--green)}
-.ctl.danger{border-color:var(--red);color:#ff8d96}
-.ctl.wide{width:100%}
+.tbbtn{background:#161b25;color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;padding:5px 9px;cursor:pointer;font-size:11px;font-weight:600;white-space:nowrap}
+.tbbtn:hover{border-color:#3a4554;background:var(--panel3)}
+.tbbtn.mini{padding:4px 6px;font-size:10px}
+.tbbtn.alt{border-color:var(--green);color:#bfeede}
+.tbbtn.danger{border-color:var(--red);color:#ffb3bb}
+.tbbtn.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.tbicon{background:transparent;color:var(--muted);border:1px solid transparent;
+  border-radius:4px;width:28px;height:26px;cursor:pointer;font-size:13px;font-weight:700;
+  display:inline-flex;align-items:center;justify-content:center}
+.tbicon.wide{width:auto;padding:0 8px;font-size:11px;gap:4px}
+.tbicon:hover{color:var(--fg2);background:var(--panel3)}
+.tbicon.active{color:var(--blue)}
+.spd-wrap{display:inline-flex;gap:2px}
+.replay-grp{gap:3px}
 
-/* ── prop challenge HUD strip + banner + toast ────────────────────────────── */
+/* TF row (ATAS M5/H1/D look) */
+#atasTf{gap:1px;background:#0e131b;border:1px solid var(--line);border-radius:5px;padding:2px}
+.tfbtn{background:transparent;color:var(--muted);border:none;border-radius:3px;
+  padding:4px 8px;cursor:pointer;font-size:11px;font-weight:700}
+.tfbtn:hover{color:var(--fg2);background:var(--panel3)}
+.tfbtn.active{background:var(--blue);color:#fff}
+.tfbtn.caret{padding:4px 5px;color:var(--muted)}
+
+.readout{gap:5px;padding:0 4px;font-size:11px}
+.conn-badge{display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--green);
+  padding:3px 8px;border:1px solid var(--line);border-radius:4px;background:#0e131b;white-space:nowrap}
+.conn-badge em{color:var(--gold);font-style:normal}
+
+/* ── prop challenge HUD + banner + toast ───────────────────────────────────── */
 .chud{display:flex;align-items:center;gap:18px;padding:4px 12px;
-  background:#161616;border-bottom:1px solid #000;font-size:12px}
+  background:#0c1017;border-bottom:1px solid #000;font-size:12px;flex:0 0 auto}
 .chud.hidden{display:none}
 .ch-item{display:inline-flex;align-items:baseline;gap:6px}
 .chud .val{min-width:auto;font-weight:700}
-.ch-chip{padding:2px 10px;border-radius:3px;font-size:10px;font-weight:800;
-  letter-spacing:1px}
-.ch-chip.active{background:rgba(44,127,255,.18);color:var(--blue);border:1px solid var(--blue)}
-.ch-chip.passed{background:rgba(0,211,1,.15);color:var(--green);border:1px solid var(--green)}
-.ch-chip.failed{background:rgba(255,0,26,.15);color:var(--red);border:1px solid var(--red)}
+.ch-chip{padding:2px 10px;border-radius:3px;font-size:10px;font-weight:800;letter-spacing:1px}
+.ch-chip.active{background:rgba(47,111,237,.18);color:var(--blue);border:1px solid var(--blue)}
+.ch-chip.passed{background:rgba(30,184,127,.15);color:var(--green);border:1px solid var(--green)}
+.ch-chip.failed{background:rgba(226,69,86,.15);color:var(--red);border:1px solid var(--red)}
 .chud .ch-amber{color:var(--orange)}
 .chud .ch-red{color:var(--red);animation:chpulse 1s ease-in-out infinite}
 @keyframes chpulse{50%{opacity:.45}}
 .chbanner{position:absolute;top:84px;left:50%;transform:translateX(-50%);
-  padding:8px 22px;border-radius:6px;font-size:15px;font-weight:800;
-  letter-spacing:.5px;pointer-events:none;z-index:10;
-  box-shadow:0 6px 22px rgba(0,0,0,.55)}
+  padding:8px 22px;border-radius:6px;font-size:15px;font-weight:800;letter-spacing:.5px;
+  pointer-events:none;z-index:10;box-shadow:0 6px 22px rgba(0,0,0,.55)}
 .chbanner.hidden{display:none}
 .chbanner.fail{background:rgba(120,0,12,.92);border:1px solid var(--red);color:#ffd7da}
 .chbanner.pass{background:rgba(0,90,2,.92);border:1px solid var(--green);color:#d8ffd6}
 .toast{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);
-  background:#262626;border:1px solid var(--orange);color:var(--fg);
+  background:#161b25;border:1px solid var(--orange);color:var(--fg);
   padding:7px 16px;border-radius:6px;font-size:12px;font-weight:600;z-index:11;
   pointer-events:none;box-shadow:0 6px 22px rgba(0,0,0,.55)}
 .toast.hidden{display:none}
 
-/* main split */
+/* ── main body ─────────────────────────────────────────────────────────────── */
 #main{display:flex;flex:1;min-height:0}
+
+/* 3. left drawing rail */
+#rail{display:flex;flex-direction:column;align-items:center;gap:2px;width:34px;
+  flex:0 0 34px;background:var(--rail);border-right:1px solid #000;padding:5px 0;overflow:hidden}
+.railbtn{width:26px;height:26px;background:transparent;color:var(--muted);
+  border:1px solid transparent;border-radius:4px;cursor:pointer;font-size:13px;
+  display:flex;align-items:center;justify-content:center}
+.railbtn:hover{color:var(--fg2);background:var(--panel3)}
+.railbtn.active{color:var(--blue);background:var(--blue-soft)}
+.rail-sp{height:8px;width:18px;border-top:1px solid var(--line);margin:4px 0}
+
+/* center column = chart row stacked over bottom panes */
+#center{display:flex;flex-direction:column;flex:1;min-width:0}
+#chartRow{display:flex;flex:1;min-height:0}
+
+/* chart panes */
 #panes{position:relative;display:flex;flex:1;min-width:0;background:var(--bg);gap:1px}
 .pane{position:relative;display:flex;flex-direction:column;flex:1;min-width:0;
   background:var(--chart);border-right:1px solid #000}
 .pane.hidden{display:none}
-
-/* per-pane toolbar — mimics the per-chart strip in DeepCharts */
 .pane-toolbar{display:flex;align-items:center;gap:5px;padding:3px 8px;
-  background:var(--toolbar);border-bottom:1px solid #000;flex-wrap:wrap}
+  background:#10141c;border-bottom:1px solid #000;flex-wrap:wrap}
 .instr-chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;
-  background:#1b1b1b;border:1px solid var(--line);border-radius:4px;
-  font-weight:700;font-size:12px}
+  background:#161b25;border:1px solid var(--line);border-radius:4px;font-weight:700;font-size:11px}
 .instr-chip .sym{color:var(--green)}
 .instr-chip .tf-label{color:var(--blue-light)}
-.pane-toolbar .tf{padding:3px 8px}
+.pane-toolbar .tf{padding:3px 8px;background:#161b25;color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;cursor:pointer;font-size:11px;font-weight:600}
+.pane-toolbar .tf:hover{border-color:#3a4554}
+.pane-toolbar .tf.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.pane-toolbar .ctl{background:#161b25;color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;padding:3px 8px;cursor:pointer;font-size:11px;font-weight:600}
+.pane-toolbar .ctl:hover{border-color:#3a4554}
+.pane-toolbar .ctl.active{background:var(--blue);border-color:var(--blue);color:#fff}
 
 .chartwrap{position:relative;flex:1;min-height:0;background:var(--chart)}
 .chartwrap .chart{position:absolute;inset:0}
@@ -88,52 +166,80 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
 .chartwrap .bacanvas{z-index:4}
 
 .badge{position:absolute;top:42px;left:50%;transform:translateX(-50%);
-  background:rgba(44,127,255,.15);border:1px solid var(--accent);color:#cfe3ff;
+  background:rgba(47,111,237,.15);border:1px solid var(--blue);color:#cfe0ff;
   padding:4px 12px;border-radius:20px;font-size:12px;pointer-events:none;z-index:9}
 .badge.hidden{display:none}
 
-/* side panel */
-#side{width:340px;flex:0 0 340px;overflow-y:auto;background:var(--panel);
-  border-left:1px solid #000;padding:10px;display:flex;flex-direction:column;gap:10px}
+/* 6. DOM / volume ladder (right edge) */
+#domLadder{position:relative;flex:0 0 86px;width:86px;background:var(--chart);
+  border-left:1px solid #000;overflow:hidden}
+.dom-cap{position:absolute;top:2px;left:4px;font-size:9px;color:var(--muted);
+  letter-spacing:.6px;z-index:2;pointer-events:none}
+#domCanvas{position:absolute;inset:0;width:100%;height:100%}
+
+/* 7. bottom panes: DOM Strength + Volume / Delta / Session Delta */
+#bottomPanes{flex:0 0 auto;display:flex;flex-direction:column;background:var(--chart);
+  border-top:1px solid #000}
+.bp-row{position:relative;height:34px;border-top:1px solid var(--line2)}
+.bp-row:first-child{border-top:none}
+.bp-domstr{height:40px}
+.bp-label{position:absolute;top:3px;left:6px;z-index:2;font-size:10px;color:var(--muted);
+  pointer-events:none;background:rgba(14,18,24,.6);padding:0 3px;border-radius:2px}
+.bp-label em{color:var(--muted);opacity:.7;font-style:normal;font-size:9px}
+.bp-canvas{position:absolute;inset:0;width:100%;height:100%}
+
+/* ── 8. trade panel (T.Panel) ──────────────────────────────────────────────── */
+#side{width:268px;flex:0 0 268px;overflow-y:auto;background:var(--panel);
+  border-left:1px solid #000;padding:8px;display:flex;flex-direction:column;gap:8px}
 #side.hidden{display:none}
-.card{background:var(--panel2);border:1px solid var(--line2);border-radius:6px;padding:10px}
-.card h3{margin:0 0 8px;font-size:13px}
+.card{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:9px}
+.card h3{margin:0 0 7px;font-size:12px;color:var(--fg2)}
 .card h3 .sub{color:var(--muted);font-weight:400;font-size:11px}
-.row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
-.row label{display:flex;flex-direction:column;gap:3px;flex:1;color:var(--muted);font-size:11px}
+.row{display:flex;gap:7px;align-items:center;margin-bottom:7px}
+.row label{display:flex;flex-direction:column;gap:3px;flex:1;color:var(--muted);font-size:10px}
 .row input{background:var(--bg);border:1px solid var(--line);border-radius:4px;
-  color:var(--fg);padding:6px;font-size:14px;font-variant-numeric:tabular-nums}
-.btns{gap:8px}
-.big{flex:1;border:none;border-radius:4px;padding:10px;font-size:15px;font-weight:800;
+  color:var(--fg2);padding:6px;font-size:13px;font-variant-numeric:tabular-nums}
+.btns{gap:7px}
+.big{flex:1;border:none;border-radius:4px;padding:11px;font-size:14px;font-weight:800;
   cursor:pointer;color:#fff;display:flex;flex-direction:column;align-items:center;gap:1px}
 .big .bsub{font-size:9px;font-weight:600;opacity:.85;letter-spacing:.6px}
-.buy{background:#0b9a06}.buy:hover{background:#0db307}
-.sell{background:#c40012}.sell:hover{background:#e00015}
-.flat{background:#444;width:100%;font-size:13px;padding:8px}
-.flat:hover{background:#555}
+.buy{background:var(--green-bar)}.buy:hover{background:#23b87d}
+.sell{background:var(--red-bar)}.sell:hover{background:#e0485a}
+.flat{background:#2a313d;width:100%;font-size:13px;padding:9px}
+.flat:hover{background:#343c49}
 .big:active{transform:translateY(1px)}
-.hint{color:var(--muted);font-size:11px;margin:4px 0}
+.hint{color:var(--muted);font-size:10px;margin:4px 0;line-height:1.45}
+.ctl{background:#161b25;color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;padding:5px 9px;cursor:pointer;font-size:11px;font-weight:600}
+.ctl:hover{border-color:#3a4554;background:var(--panel3)}
+.ctl.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.ctl.alt{border-color:var(--green)}
+.ctl.wide{width:100%}
+.ctl.apply{background:var(--blue);border-color:var(--blue);color:#fff}
+.ctl.apply:hover{background:var(--blue-d)}
 
-/* T.Panel header + qty stepper (Volumetrica order entry) */
 .tp-head{display:flex;align-items:center;justify-content:space-between;gap:8px;
-  margin:-10px -10px 8px;padding:7px 10px;background:#1b1b1b;
-  border-bottom:1px solid var(--line2);border-radius:6px 6px 0 0}
+  margin:-9px -9px 8px;padding:7px 9px;background:#11161f;
+  border-bottom:1px solid var(--line);border-radius:6px 6px 0 0}
 .tp-title{font-weight:800;font-size:11px;letter-spacing:1.2px;color:var(--blue-light)}
-#instrument{background:var(--toolbar);color:var(--fg);border:1px solid var(--line);
-  border-radius:4px;padding:4px 6px;font-size:12px;font-weight:700}
+#instrument{background:#161b25;color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;padding:4px 6px;font-size:11px;font-weight:700}
+.acct-row{display:flex;align-items:center;justify-content:space-between;
+  font-size:10px;color:var(--muted);margin-bottom:8px}
+.acct-name{color:var(--blue-light);font-weight:700}
+.acct-bal b{color:var(--fg2)}
 .qtyrow{display:flex;align-items:center;gap:6px;margin-bottom:8px}
 .qty-cap{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.8px}
-.qbtn{width:34px;height:30px;background:var(--toolbar);border:1px solid var(--line);
+.qbtn{width:32px;height:30px;background:#161b25;border:1px solid var(--line);
   border-radius:4px;color:var(--fg);font-size:16px;font-weight:700;cursor:pointer}
-.qbtn:hover{border-color:#5a5a5a}
+.qbtn:hover{border-color:#3a4554}
 .qtyrow input{flex:1;text-align:center;background:var(--bg);border:1px solid var(--line);
-  border-radius:4px;color:var(--fg);padding:5px;font-size:16px;font-weight:700;
+  border-radius:4px;color:var(--fg2);padding:5px;font-size:16px;font-weight:700;
   font-variant-numeric:tabular-nums}
 .presets{flex-wrap:wrap}
-.presets .preset{flex:1;min-width:64px;padding:4px 4px;font-size:10px}
+.presets .preset{flex:1;min-width:60px;padding:4px;font-size:10px}
 
-.muted{color:var(--muted)}
-#posbody .pl{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+#posbody .pl{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums}
 #posbody .grid{display:grid;grid-template-columns:auto auto;gap:2px 12px;margin-top:6px}
 #posbody .grid span:nth-child(odd){color:var(--muted)}
 .pos-long{color:var(--green)} .pos-short{color:var(--red)}
@@ -142,26 +248,23 @@ table#stats{width:100%;border-collapse:collapse}
 table#stats td{padding:3px 4px;font-variant-numeric:tabular-nums}
 table#stats td:first-child{color:var(--muted)}
 table#stats td:last-child{text-align:right;font-weight:600}
-.pos{color:var(--green)} .neg{color:var(--red)}
 .edgebox{margin-top:8px;padding:8px;border-radius:4px;background:var(--bg);
   border:1px solid var(--line2);text-align:center}
-.edgebox .big-edge{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}
+.edgebox .big-edge{font-size:21px;font-weight:800;font-variant-numeric:tabular-nums}
 .edgebox .cap{color:var(--muted);font-size:11px}
 .edgebox .decomp{margin-top:8px;padding-top:8px;border-top:1px solid var(--line2);
   display:flex;flex-direction:column;gap:4px;text-align:left}
 .edgebox .drow{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
-.edgebox .dk{color:var(--fg);font-size:12px;font-weight:600;display:flex;
-  flex-direction:column;line-height:1.25}
+.edgebox .dk{color:var(--fg);font-size:12px;font-weight:600;display:flex;flex-direction:column;line-height:1.25}
 .edgebox .dh{color:var(--muted);font-size:10px;font-weight:400}
-.edgebox .dv{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;
-  white-space:nowrap}
+.edgebox .dv{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 
-.tradeslist{max-height:220px;overflow-y:auto;font-size:11px;font-variant-numeric:tabular-nums}
+.tradeslist{max-height:200px;overflow-y:auto;font-size:11px;font-variant-numeric:tabular-nums}
 .tradeslist .t{display:grid;grid-template-columns:34px 44px 1fr auto;gap:6px;
   padding:3px 2px;border-bottom:1px solid var(--line2)}
 .tradeslist .t .s.LONG{color:var(--green)} .tradeslist .t .s.SHORT{color:var(--red)}
 
-/* modal */
+/* ── modal ─────────────────────────────────────────────────────────────────── */
 #overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;
   align-items:center;justify-content:center;z-index:50}
 #overlay.hidden{display:none}
@@ -174,63 +277,74 @@ table#stats td:last-child{text-align:right;font-weight:600}
 #modalbody td:first-child{color:var(--muted)}
 #modalbody td:last-child{text-align:right;font-weight:600}
 
-#help{padding:6px 12px;background:var(--toolbar);border-top:1px solid #000;
-  color:var(--muted);font-size:11px;line-height:1.5}
+#help{padding:5px 12px;background:var(--toolbar);border-top:1px solid #000;
+  color:var(--muted);font-size:10px;line-height:1.5;flex:0 0 auto}
 #help b{color:var(--fg)}
-.hidden{display:none}
 
-/* ── volume profile config popup (one per pane) ───────────────────────────── */
+/* ── volume profile config popup ───────────────────────────────────────────── */
 .ctl.gear{padding:4px 8px;font-size:13px;line-height:1}
 .vpcfg{position:absolute;top:8px;right:8px;z-index:7;width:208px;
   background:var(--panel);border:1px solid var(--line);border-radius:6px;
-  padding:10px 12px;box-shadow:0 8px 26px rgba(0,0,0,.6);
-  display:flex;flex-direction:column;gap:8px}
+  padding:10px 12px;box-shadow:0 8px 26px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:8px}
 .vpcfg.hidden{display:none}
 .vpcfg-h{font-weight:700;font-size:12px;letter-spacing:.4px;color:var(--blue-light);
   text-transform:uppercase;margin-bottom:2px}
-.vpcfg label{display:flex;align-items:center;justify-content:space-between;
-  gap:8px;color:var(--muted);font-size:12px}
-.vpcfg input[type=number],.vpcfg select{width:84px;background:var(--toolbar);
-  color:var(--fg);border:1px solid var(--line);border-radius:4px;
-  padding:3px 6px;font-size:12px;font-variant-numeric:tabular-nums}
+.vpcfg label{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  color:var(--muted);font-size:12px}
+.vpcfg input[type=number],.vpcfg select{width:84px;background:#161b25;color:var(--fg);
+  border:1px solid var(--line);border-radius:4px;padding:3px 6px;font-size:12px;
+  font-variant-numeric:tabular-nums}
 .vpcfg label.vpck{justify-content:flex-start;cursor:pointer}
 .vpcfg label.vpck input{width:auto;margin-right:6px;accent-color:var(--accent)}
 
-/* ── studies dropdown (per pane + session reads) ──────────────────────────── */
+/* ── studies dropdown ──────────────────────────────────────────────────────── */
 .studies-wrap{position:relative;display:inline-flex}
-.studies-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:12;
-  background:var(--panel);border:1px solid var(--line);border-radius:6px;
-  padding:8px;box-shadow:0 8px 26px rgba(0,0,0,.6);
-  display:flex;flex-direction:column;gap:6px;min-width:178px}
+.studies-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:12;
+  background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px;
+  box-shadow:0 8px 26px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:6px;min-width:178px}
 .studies-menu.hidden{display:none}
 .studies-menu .menuitem{width:100%;text-align:left}
 .studies-menu .menurow{display:flex;gap:6px}
 .studies-menu .menurow .menuitem{flex:1}
+.menuitem{background:#161b25;color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;padding:5px 9px;cursor:pointer;font-size:11px;font-weight:600}
+.menuitem:hover{border-color:#3a4554}
+.menuitem.active{background:var(--blue);border-color:var(--blue);color:#fff}
 
-/* ── flow light pill (trailing-60s order-flow permission read) ─────────────── */
-.flowpill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
+/* ── flow / heat pills ─────────────────────────────────────────────────────── */
+.flowpill,.heatpill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;
   border-radius:20px;border:1px solid var(--line);background:var(--panel2);
-  font-size:11px;font-weight:700;letter-spacing:.3px;
+  font-size:10px;font-weight:700;letter-spacing:.3px;
   transition:border-color .12s,background .12s,color .12s}
-.flowpill #flowlabel{font-size:10px;text-transform:uppercase;opacity:.9}
-.flowpill #flowval{min-width:auto;font-size:12px;font-variant-numeric:tabular-nums}
-.flowpill.neutral{border-color:var(--line);color:var(--muted)}
-.flowpill.long{border-color:var(--green);color:var(--green);background:rgba(0,211,1,.10)}
-.flowpill.short{border-color:var(--red);color:var(--red);background:rgba(255,0,26,.10)}
-.flowpill.off{display:none}   /* toggle OFF -> pill gone entirely, no layout gap */
-.flowpill.flash{animation:flowflash .5s ease-out}
-@keyframes flowflash{0%{box-shadow:0 0 0 0 rgba(44,127,255,.65)}
-  100%{box-shadow:0 0 0 6px rgba(44,127,255,0)}}
-
-/* ── open heat pill (5-min opening-range width, 09:30–09:35) ────────────────── */
-.heatpill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
-  border-radius:20px;border:1px solid var(--line);background:var(--panel2);
-  font-size:11px;font-weight:700;letter-spacing:.3px;
-  transition:border-color .12s,background .12s,color .12s}
-.heatpill #heatlabel{font-size:10px;text-transform:uppercase;opacity:.9}
-.heatpill #heatval{min-width:auto;font-size:12px;font-variant-numeric:tabular-nums}
-.heatpill.neutral{border-color:var(--line);color:var(--muted)}
-.heatpill.quiet{border-color:var(--green);color:var(--green);background:rgba(0,211,1,.10)}
+.flowpill #flowlabel,.heatpill #heatlabel{font-size:9px;text-transform:uppercase;opacity:.9}
+.flowpill #flowval,.heatpill #heatval{min-width:auto;font-size:11px;font-variant-numeric:tabular-nums}
+.flowpill.neutral,.heatpill.neutral{border-color:var(--line);color:var(--muted)}
+.flowpill.long{border-color:var(--green);color:var(--green);background:rgba(30,184,127,.10)}
+.flowpill.short{border-color:var(--red);color:var(--red);background:rgba(226,69,86,.10)}
+.heatpill.quiet{border-color:var(--green);color:var(--green);background:rgba(30,184,127,.10)}
 .heatpill.warm{border-color:var(--orange);color:var(--orange);background:rgba(203,150,3,.12)}
-.heatpill.hot{border-color:var(--red);color:var(--red);background:rgba(255,0,26,.12)}
-.heatpill.off{display:none}   /* toggle OFF -> pill gone entirely, no layout gap */
+.heatpill.hot{border-color:var(--red);color:var(--red);background:rgba(226,69,86,.12)}
+.flowpill.off,.heatpill.off{display:none}
+.flowpill.flash{animation:flowflash .5s ease-out}
+@keyframes flowflash{0%{box-shadow:0 0 0 0 rgba(47,111,237,.65)}100%{box-shadow:0 0 0 6px rgba(47,111,237,0)}}
+
+/* ── timeframe Configure/Apply dropdown (ATAS X) ───────────────────────────── */
+.tfcfg{position:absolute;top:70px;left:120px;z-index:40;width:430px;
+  background:var(--panel);border:1px solid var(--line);border-radius:6px;
+  padding:12px 14px;box-shadow:0 12px 34px rgba(0,0,0,.7)}
+.tfcfg.hidden{display:none}
+.tfcfg-grid{display:grid;grid-template-columns:84px 1fr;gap:7px 10px;align-items:center}
+.tfcfg-rlabel{font-size:11px;color:var(--fg);font-weight:600}
+.tfcfg-rlabel.dis{color:var(--muted);opacity:.5}
+.tfcfg-cells{display:flex;gap:5px;flex-wrap:wrap}
+.tfcfg-cells.dis{opacity:.4}
+.tfc{min-width:34px;padding:5px 8px;background:#161b25;color:var(--fg);
+  border:1px solid var(--line);border-radius:4px;cursor:pointer;font-size:11px;font-weight:600}
+.tfc:hover{border-color:#3a4554}
+.tfc.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.tfc.dis{opacity:.45;cursor:not-allowed;pointer-events:none}
+.tfcfg-foot{display:flex;align-items:center;gap:10px;margin-top:14px;
+  padding-top:12px;border-top:1px solid var(--line2)}
+.tfcfg-dates{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.tfcfg-dates.dis{opacity:.5}
+.tfcfg-spacer{flex:1}

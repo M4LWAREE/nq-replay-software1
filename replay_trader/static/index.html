@@ -3,60 +3,102 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Replay Trader — NQ tick replay</title>
+<title>Replay Trader — ATAS X style (NQ tick replay)</title>
 <link rel="stylesheet" href="/static/styles.css"/>
 <script src="/static/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 <div id="app">
-  <!-- top control bar — DeepCharts-style toolbar -->
+
+  <!-- ── 1. instrument tab bar (ATAS X) ───────────────────────────────────── -->
+  <div id="tabbar">
+    <div class="itab active" data-tab="nq">
+      <span class="itab-name">NQ (footprint)</span>
+      <span class="itab-x" title="close tab">×</span>
+    </div>
+    <div class="itab" data-tab="alt">
+      <span class="itab-name">MNQ</span>
+    </div>
+    <button id="tabAdd" class="itab-add" title="New chart tab">+</button>
+  </div>
+
+  <!-- ── 2. top toolbar (ATAS X) ───────────────────────────────────────────── -->
   <header id="topbar">
-    <div class="grp brand"><span class="brand-sym">/NQ</span> REPLAY</div>
+    <!-- chart-type / footprint toggle (left of TF row in ATAS) -->
     <div class="grp">
-      <button id="btnPlay" class="ctl">▶ Play</button>
-      <span class="seps"></span>
-      <span class="lbl">Speed</span>
-      <button class="spd ctl" data-spd="1">1×</button>
-      <button class="spd ctl" data-spd="2">2×</button>
-      <button class="spd ctl" data-spd="5">5×</button>
-      <button class="spd ctl" data-spd="20">20×</button>
-      <button id="btnJump" class="ctl">Jump +5m</button>
-      <button id="btnClose" class="ctl" title="Jump to :59 of the current 1-min bar, then pause (key 9)">→ :59</button>
+      <button class="tbicon" id="tbChartType" title="Chart type">C</button>
     </div>
+    <span class="tbsep"></span>
+
+    <!-- timeframe row — real engine TFs, styled like ATAS M5/H1/D buttons -->
+    <div class="grp" id="atasTf" title="Timeframe (drives the main chart)">
+      <button class="tfbtn" data-tf="5s">5s</button>
+      <button class="tfbtn" data-tf="30s">30s</button>
+      <button class="tfbtn" data-tf="1m">M1</button>
+      <button class="tfbtn" data-tf="5m">M5</button>
+      <button class="tfbtn" data-tf="15m">M15</button>
+      <button class="tfbtn caret" id="tfConfigBtn" title="Timeframe configuration">▾</button>
+    </div>
+    <span class="tbsep"></span>
+
+    <!-- chart-type + indicators -->
     <div class="grp">
-      <button id="btnLayout" class="ctl" title="Toggle single / dual chart layout (dual = 15m footprint left, your chart right, time-synced)">▯▯ Dual</button>
-      <button id="btnTPanel" class="ctl active" title="Show / hide the trading panel">T. Panel</button>
-      <div class="studies-wrap">
-        <button id="btnSessStudies" class="ctl" title="Session reads (toolbar pills)">Reads ▾</button>
-        <div id="sessStudiesMenu" class="studies-menu hidden">
-          <button id="btnFlow" class="ctl menuitem" title="Flow Light: trailing-60s order-flow permission pill in the toolbar (default on). When off, the server skips the calc.">Flow Light</button>
-          <button id="btnHeat" class="ctl menuitem" title="Open Heat: 5-min opening-range width (09:30–09:35) pill in the toolbar (default on). Green &lt;250tk quiet, amber 250–400, red &gt;400 heat protocol. When off, the server skips the calc.">Open Heat</button>
-        </div>
-      </div>
+      <button class="tbicon" id="tbCandles" title="Candles / Footprint (zoom-adaptive — also flips automatically)">▦</button>
+      <button class="tbicon wide" id="tbIndicators" title="Indicators (studies for the main chart)">⌗ Indicators</button>
     </div>
+    <span class="tbsep"></span>
+
+    <!-- replay transport (engine controls — ATAS-styled) -->
+    <div class="grp replay-grp">
+      <button id="btnPlay" class="tbbtn">▶ Play</button>
+      <span class="spd-wrap">
+        <button class="spd tbbtn mini" data-spd="1">1×</button>
+        <button class="spd tbbtn mini" data-spd="2">2×</button>
+        <button class="spd tbbtn mini" data-spd="5">5×</button>
+        <button class="spd tbbtn mini" data-spd="20">20×</button>
+      </span>
+      <button id="btnJump" class="tbbtn">+5m</button>
+      <button id="btnClose" class="tbbtn" title="Jump to :59 of the current 1-min bar, then pause (key 9)">→:59</button>
+    </div>
+
+    <!-- readout cluster -->
     <div class="grp readout">
       <span class="lbl">ET</span><span id="clock" class="val">--:--:--</span>
       <span class="lbl">Px</span><span id="price" class="val">--</span>
       <span class="lbl">Done</span><span id="prog" class="val">0%</span>
-      <span class="seps"></span>
-      <span id="flowpill" class="flowpill neutral"
-            title="Trailing-60s signed order-flow (Σ side×size of seen ticks). A permission read for your discretion — never blocks a trade.">
-        <span id="flowlabel">FLOW</span><span id="flowval" class="val">—</span>
-      </span>
-      <span id="heatpill" class="heatpill neutral"
-            title="5-min opening-range width (09:30–09:35, max−min ticks). Live until 09:35 then frozen. Green &lt;250 quiet — your tape; amber 250–400; red &gt;400 heat protocol: half size, double warmup, wider trail, first stop ends session.">
-        <span id="heatlabel">OPEN</span><span id="heatval" class="val">—</span>
-      </span>
     </div>
+    <span id="flowpill" class="flowpill neutral"
+          title="Trailing-60s signed order-flow (Σ side×size of seen ticks). A permission read for your discretion — never blocks a trade.">
+      <span id="flowlabel">FLOW</span><span id="flowval" class="val">—</span>
+    </span>
+    <span id="heatpill" class="heatpill neutral"
+          title="5-min opening-range width (09:30–09:35, max−min ticks). Live until 09:35 then frozen.">
+      <span id="heatlabel">OPEN</span><span id="heatval" class="val">—</span>
+    </span>
+
+    <!-- right cluster: connection badge + window icons (ATAS) -->
     <div class="grp right">
-      <button id="btnChallenge" class="ctl"
-              title="Prop Challenge mode (applies to the NEXT session): Topstep-style 50K combine — $50,000 start, $2,000 trailing MLL on real-time equity (locks at $50,100), $3,000 profit target, 5-mini/50-micro size cap, no consistency rule. MLL touch = flatten + entries blocked.">⚡ Challenge</button>
-      <button id="btnNew" class="ctl alt">New Session</button>
-      <button id="btnEnd" class="ctl danger">End &amp; Reveal</button>
+      <button id="btnLayout" class="tbbtn" title="Toggle single / dual chart layout (dual = 15m footprint left, your chart right, time-synced)">▯▯ Dual</button>
+      <button id="btnTPanel" class="tbbtn active" title="Show / hide the trading panel">T.Panel</button>
+      <div class="studies-wrap">
+        <button id="btnSessStudies" class="tbbtn" title="Session reads (toolbar pills)">Reads ▾</button>
+        <div id="sessStudiesMenu" class="studies-menu hidden">
+          <button id="btnFlow" class="ctl menuitem" title="Flow Light: trailing-60s order-flow permission pill (default on).">Flow Light</button>
+          <button id="btnHeat" class="ctl menuitem" title="Open Heat: 5-min opening-range width pill (default on).">Open Heat</button>
+        </div>
+      </div>
+      <span class="conn-badge" title="Replay tape connected">● dxFeed&nbsp;<em>Delayed&nbsp;15m</em></span>
+      <button id="btnChallenge" class="tbicon" title="Prop Challenge mode (applies to the NEXT session): Topstep-style 50K combine.">⚡</button>
+      <button id="btnNew" class="tbbtn alt">New Session</button>
+      <button id="btnEnd" class="tbbtn danger">End &amp; Reveal</button>
+      <button class="tbicon" id="tbWin" title="Window">▢</button>
+      <button class="tbicon" id="tbSettings" title="Settings">⚙</button>
+      <button class="tbicon" id="tbEth" title="ETH / RTH session">ETH</button>
+      <button class="tbicon" id="tbMenu" title="Menu">☰ Menu</button>
     </div>
   </header>
 
-  <!-- prop-challenge HUD (visible only when the session is a challenge attempt) -->
+  <!-- prop-challenge HUD -->
   <div id="chud" class="chud hidden">
     <span class="ch-chip" id="chStatus">ACTIVE</span>
     <span class="ch-item"><span class="lbl">Balance</span><span id="chBal" class="val">—</span></span>
@@ -67,27 +109,81 @@
     <span class="ch-item muted" id="chLock"></span>
   </div>
 
+  <!-- ── main body: rail | (chart + ladder + bottom panes) | trade panel ───── -->
   <div id="main">
-    <!-- chart panes. pane1 = LEFT context pane (15m footprint, hidden in single
-         layout); pane0 = RIGHT main pane. Internals are built by app.js from a
-         template so every study/canvas exists once per pane. -->
-    <section id="panes" class="single">
-      <div class="pane hidden" id="pane1"></div>
-      <div class="pane" id="pane0"></div>
-      <div id="paused-badge" class="badge">PAUSED — press Space / Play</div>
-      <div id="chbanner" class="chbanner hidden"></div>
-      <div id="toast" class="toast hidden"></div>
+
+    <!-- 3. left drawing-tools rail -->
+    <nav id="rail" title="Drawing tools">
+      <button class="railbtn" title="Cursor">⌖</button>
+      <button class="railbtn" title="Crosshair">✛</button>
+      <button class="railbtn" title="Trend line">╱</button>
+      <button class="railbtn" title="Horizontal line">─</button>
+      <button class="railbtn" title="Ray">↗</button>
+      <button class="railbtn" title="Fib retracement">𝑓</button>
+      <button class="railbtn" title="Rectangle">▭</button>
+      <button class="railbtn" title="Text">T</button>
+      <button class="railbtn" title="Measure">⊿</button>
+      <button class="railbtn" title="Brush">✎</button>
+      <button class="railbtn" title="Magnet">🧲</button>
+      <span class="rail-sp"></span>
+      <button class="railbtn" title="Lock drawings">🔒</button>
+      <button class="railbtn" title="Hide drawings">👁</button>
+      <button class="railbtn" title="Remove drawings">🗑</button>
+    </nav>
+
+    <!-- center column: chart row (panes + DOM ladder) over the bottom panes -->
+    <section id="center">
+      <div id="chartRow">
+        <!-- chart panes (built by app.js). pane1 = left context, pane0 = main -->
+        <section id="panes" class="single">
+          <div class="pane hidden" id="pane1"></div>
+          <div class="pane" id="pane0"></div>
+          <div id="paused-badge" class="badge">PAUSED — press Space / Play</div>
+          <div id="chbanner" class="chbanner hidden"></div>
+          <div id="toast" class="toast hidden"></div>
+        </section>
+
+        <!-- 6. right-edge DOM / volume ladder -->
+        <aside id="domLadder">
+          <div class="dom-cap">DOM</div>
+          <canvas id="domCanvas"></canvas>
+        </aside>
+      </div>
+
+      <!-- 7. bottom panes: DOM Strength + Volume / Delta / Session Delta -->
+      <div id="bottomPanes">
+        <div class="bp-row bp-domstr">
+          <span class="bp-label">DOM Strength <em>(Bars, 5, 50.0, True)</em></span>
+          <canvas class="bp-canvas" id="bpDomStr"></canvas>
+        </div>
+        <div class="bp-row">
+          <span class="bp-label">Volume</span>
+          <canvas class="bp-canvas" id="bpVolume"></canvas>
+        </div>
+        <div class="bp-row">
+          <span class="bp-label">Delta</span>
+          <canvas class="bp-canvas" id="bpDelta"></canvas>
+        </div>
+        <div class="bp-row">
+          <span class="bp-label">Session Delta</span>
+          <canvas class="bp-canvas" id="bpSessDelta"></canvas>
+        </div>
+      </div>
     </section>
 
-    <!-- side panel -->
+    <!-- 8. right-side trade panel (T.Panel) — ATAS X order entry, fully wired -->
     <aside id="side">
       <div class="card" id="tradecard">
         <div class="tp-head">
-          <span class="tp-title">T. PANEL</span>
+          <span class="tp-title">T.PANEL</span>
           <select id="instrument">
             <option value="micro">/MNQ · Micro ($0.50/tk)</option>
             <option value="mini">/NQ · Mini ($5/tk)</option>
           </select>
+        </div>
+        <div class="acct-row">
+          <span class="acct-name">Sim · DEMO</span>
+          <span class="acct-bal">Bal: <b id="acctBal">N/A</b></span>
         </div>
         <div class="qtyrow">
           <span class="qty-cap">QTY</span>
@@ -95,15 +191,15 @@
           <input id="lots" type="number" min="1" step="1" value="1"/>
           <button id="qtyPlus" class="qbtn" type="button">+</button>
         </div>
-        <div class="row btns">
+        <div class="row btns bsgrid">
           <button id="btnSell" class="big sell">SELL<span class="bsub">MKT · S</span></button>
           <button id="btnBuy" class="big buy">BUY<span class="bsub">MKT · B</span></button>
         </div>
-        <div class="row">
+        <div class="row brk">
           <label>Stop (tk) <input id="stop" type="number" min="0" step="1" placeholder="ticks"/></label>
           <label>Target (tk) <input id="target" type="number" min="0" step="1" placeholder="ticks"/></label>
         </div>
-        <div class="row">
+        <div class="row brk">
           <label>Trail (tk) <input id="trail" type="number" min="0" step="1" placeholder="off"/></label>
           <label>Arm at +X (tk) <input id="arm" type="number" min="0" step="1" placeholder="0"/></label>
         </div>
@@ -115,10 +211,10 @@
           <button class="ctl preset" data-stop="40" data-target="5">40 / 5</button>
         </div>
         <div class="row"><button id="btnApply" class="ctl wide">Apply stop/target/trail</button></div>
-        <div class="row">
+        <div class="row close-flat">
           <button id="btnFlat" class="big flat">FLATTEN (F)</button>
         </div>
-        <div class="hint">Stop/Target/Trail are TICK offsets from your fill. <b>Trail</b> = ratchet distance (peak − N tk); <b>Arm at +X</b> = trail only starts after +X tk profit (0 = from entry). Blank/0 Trail = off. Editable while in a position — type new ticks &amp; hit Apply (recomputed from the original fill; trail never loosens).</div>
+        <div class="hint">Stop/Target/Trail are TICK offsets from your fill. <b>Trail</b> = ratchet distance (peak − N tk); <b>Arm at +X</b> = trail only starts after +X tk profit (0 = from entry). Blank/0 Trail = off. Editable while in a position — type new ticks &amp; hit Apply.</div>
       </div>
 
       <div class="card" id="poscard">
@@ -139,6 +235,51 @@
     </aside>
   </div>
 
+  <!-- timeframe Configure/Apply dropdown (ATAS X) -->
+  <div id="tfConfig" class="tfcfg hidden">
+    <div class="tfcfg-grid">
+      <div class="tfcfg-rlabel">TimeFrame</div>
+      <div class="tfcfg-cells" data-group="tf">
+        <button class="tfc" data-tf="1m">M1</button>
+        <button class="tfc" data-tf="5m">M5</button>
+        <button class="tfc dis">M10</button>
+        <button class="tfc" data-tf="15m">M15</button>
+        <button class="tfc dis">M30</button>
+        <button class="tfc dis">H1</button>
+        <button class="tfc dis">H4</button>
+        <button class="tfc dis">Daily</button>
+        <button class="tfc dis">Weekly</button>
+      </div>
+
+      <div class="tfcfg-rlabel">Seconds</div>
+      <div class="tfcfg-cells" data-group="tf">
+        <button class="tfc" data-tf="5s">5</button>
+        <button class="tfc dis">10</button>
+        <button class="tfc dis">15</button>
+        <button class="tfc" data-tf="30s">30</button>
+        <button class="tfc dis">50</button>
+      </div>
+
+      <div class="tfcfg-rlabel dis">Tick</div>
+      <div class="tfcfg-cells dis"><button class="tfc dis">100</button><button class="tfc dis">300</button><button class="tfc dis">500</button><button class="tfc dis">1000</button></div>
+
+      <div class="tfcfg-rlabel dis">Volume</div>
+      <div class="tfcfg-cells dis"><button class="tfc dis">100</button><button class="tfc dis">300</button><button class="tfc dis">500</button><button class="tfc dis">1000</button></div>
+
+      <div class="tfcfg-rlabel dis">Range</div>
+      <div class="tfcfg-cells dis"><button class="tfc dis">4</button><button class="tfc dis">8</button></div>
+
+      <div class="tfcfg-rlabel dis">Renko</div>
+      <div class="tfcfg-cells dis"><button class="tfc dis">2</button><button class="tfc dis">4</button><button class="tfc dis">8</button></div>
+    </div>
+    <div class="tfcfg-foot">
+      <label class="tfcfg-dates dis"><input type="checkbox" disabled/> Set dates</label>
+      <span class="tfcfg-spacer"></span>
+      <button id="tfConfigClose" class="ctl">Configure</button>
+      <button id="tfConfigApply" class="ctl apply">Apply</button>
+    </div>
+  </div>
+
   <!-- how-to / summary modal -->
   <div id="overlay" class="hidden">
     <div id="modal">
@@ -151,14 +292,14 @@
   </div>
 
   <div id="help">
-    <b>How to use:</b> Press <b>Play</b> (or Space) to start the tape. Bars build tick-by-tick in real time.
-    <b>BUY</b>/<b>SELL</b> (keys B/S) open a market order at the next print +slip; set Stop/Target first or
-    edit them live then <b>Apply</b>. <b>FLATTEN</b> (F) closes now. <b>▯▯ Dual</b> adds a second time-synced
-    chart (15m footprint context). The date is hidden and prices are offset — you're reading the tape blind.
-    Your net is scored against a <b>coin-flip</b> taking the same trades in a random direction:
-    <b>edge/trade</b> is your real edge. End &amp; Reveal shows the date.
+    <b>How to use:</b> Press <b>Play</b> (or Space) to start the tape. Bars build tick-by-tick.
+    <b>BUY</b>/<b>SELL</b> (keys B/S) open a market order; set Stop/Target first or edit live then <b>Apply</b>.
+    <b>FLATTEN</b> (F) closes now. Zoom in on the chart to flip from candles to footprint clusters automatically.
+    <b>▯▯ Dual</b> adds a time-synced 15m footprint context pane. The date is hidden and prices are offset —
+    you're reading the tape blind. End &amp; Reveal shows the date.
   </div>
 </div>
 <script src="/static/app.js"></script>
+<script src="/static/atas-ui.js"></script>
 </body>
 </html>

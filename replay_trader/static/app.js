@@ -20,13 +20,13 @@ const money = (v) => (v === null || v === undefined ? "—"
 
 // ── DeepCharts palette (sampled from reference/deepcharts_ui_reference.png) ──
 const COL = {
-  bg: "#121212", axis: "#0a0a0a", grid: "#1e1e1e", border: "#2e2e2e",
-  text: "#c8c8c8",
-  green: "#00d301", red: "#ff001a",
+  bg: "#0e1218", axis: "#0a0d12", grid: "#161c25", border: "#222a36",
+  text: "#c7cedb",
+  green: "#1eb87f", red: "#e24556",
   purple: "#8e3ae3", purpleDeep: "#612499",
-  blue: "#2c7fff", blueLight: "#99d9ea",
-  gold: "#f1b100", magenta: "#e9077e", orange: "#cb9603",
-  fpGreen: "#21d501",
+  blue: "#2f6fed", blueLight: "#8fb6ff",
+  gold: "#e3a008", magenta: "#d6418f", orange: "#cb9603",
+  fpGreen: "#1eb87f",
 };
 
 const utcHMS = (t) => {

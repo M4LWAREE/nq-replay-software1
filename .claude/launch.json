@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "replay-trader",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["replay_trader/replay_trader.py", "--port", "5056"],
+      "port": 5056
+    }
+  ]
+}
