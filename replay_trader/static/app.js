@@ -1368,8 +1368,12 @@ function renderMode(s) {
 }
 
 if (btnMode) btnMode.onclick = async () => {
-  const r = await post("/api/control", { action: "auto_mode", on: !autoOn });
-  if (r && r.ok === false && r.err) toast(r.err);   // e.g. "flatten the manual position first"
+  // Derive the target from the button's displayed state, not just the cached
+  // `autoOn` flag, so a click is never a no-op even if a poll hasn't synced yet.
+  const target = btnMode.textContent.trim() !== "AUTO";
+  const r = await post("/api/control", { action: "auto_mode", on: target });
+  if (r && r.ok === false && r.err) toast(r.err);        // no session / hard error
+  else if (r && r.note) toast(r.note);                   // e.g. flattened to enable AUTO
   renderState(r);
   poll();
 };

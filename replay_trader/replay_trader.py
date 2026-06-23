@@ -909,18 +909,25 @@ class ReplaySession:
 
     def set_auto_mode(self, on):
         """Toggle AUTO (engine trades the strategy) vs MANUAL (Diego trades by hand).
-        Refuses to enable AUTO while a MANUAL position/order is live (flatten first)."""
+        AUTO and a manual position are mutually exclusive, so enabling AUTO while a
+        manual position / working order is live FLATTENS it first and says so — the
+        switch must never silently no-op. Returns `note` describing any side effect."""
         with self.lock:
             on = bool(on)
+            note = None
             if on and not self.auto_mode:
                 manual_live = ((self.position is not None and not self.position.get("auto"))
                                or self.pending is not None)
                 if manual_live:
-                    return {"ok": False, "err": "flatten the manual position first to enable AUTO"}
+                    # close/cancel the open manual trade so AUTO can take over cleanly
+                    pending_only = self.position is None
+                    self.flatten()
+                    note = ("cancelled your working order to enable AUTO" if pending_only
+                            else "flattened your manual position to enable AUTO")
             self.auto_mode = on
             if not on:
                 self.auto_armed = None         # disarm any pending reclaim buy-stop
-            return {"ok": True, "auto_mode": on}
+            return {"ok": True, "auto_mode": on, "note": note}
 
     def set_va(self, pct):
         """Set the value-area % used by the AUTO strategy (70 locked; 41 candidate)."""
