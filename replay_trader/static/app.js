@@ -1367,16 +1367,48 @@ function renderMode(s) {
     vaInput.value = Math.round(s.va_pct);
 }
 
-if (btnMode) btnMode.onclick = async () => {
+// Bind with addEventListener (not .onclick) so nothing loaded later can silently
+// clobber the handler, and guard against re-entrant clicks while a flip is in
+// flight. The button is type="button" in the template so it can never act as a
+// stray form-submit.
+let modeBusy = false;
+if (btnMode) btnMode.addEventListener("click", async () => {
+  if (modeBusy) return;                       // ignore double-clicks mid-flip
+  modeBusy = true;
   // Derive the target from the button's displayed state, not just the cached
   // `autoOn` flag, so a click is never a no-op even if a poll hasn't synced yet.
-  const target = btnMode.textContent.trim() !== "AUTO";
-  const r = await post("/api/control", { action: "auto_mode", on: target });
-  if (r && r.ok === false && r.err) toast(r.err);        // no session / hard error
-  else if (r && r.note) toast(r.note);                   // e.g. flattened to enable AUTO
-  renderState(r);
-  poll();
-};
+  const wasAuto = btnMode.textContent.trim() === "AUTO";
+  const target = !wasAuto;
+  // Optimistic flip: update the label + colour the instant the click lands so the
+  // toggle always feels alive even before the round trip resolves. The server is
+  // authoritative — renderState() below reconciles to the real state, and we revert
+  // on a hard error.
+  btnMode.textContent = target ? "AUTO" : "MANUAL";
+  btnMode.classList.toggle("auto", target);
+  const revert = () => {
+    btnMode.textContent = wasAuto ? "AUTO" : "MANUAL";
+    btnMode.classList.toggle("auto", wasAuto);
+  };
+  try {
+    const r = await post("/api/control", { action: "auto_mode", on: target });
+    if (r && r.ok === false && r.err) {       // no session / hard error
+      revert();
+      toast(r.err);
+    } else {
+      // Always confirm with a toast — flattened-position note if the server sent
+      // one, otherwise a plain mode confirmation so a no-position flip is never
+      // silent (used to look "dead" when nothing visibly happened).
+      toast(r && r.note ? r.note : (target ? "AUTO mode ON" : "MANUAL mode"));
+      renderState(r);
+    }
+  } catch (e) {
+    revert();
+    toast("mode switch failed");
+  } finally {
+    modeBusy = false;
+    poll();
+  }
+});
 if (vaInput) vaInput.addEventListener("change", async () => {
   const r = await post("/api/control", { action: "va", va: +vaInput.value || 70 });
   renderState(r);
