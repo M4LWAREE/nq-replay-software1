@@ -909,21 +909,28 @@ class ReplaySession:
 
     def set_auto_mode(self, on):
         """Toggle AUTO (engine trades the strategy) vs MANUAL (Diego trades by hand).
-        AUTO and a manual position are mutually exclusive, so enabling AUTO while a
-        manual position / working order is live FLATTENS it first and says so — the
-        switch must never silently no-op. Returns `note` describing any side effect."""
+        AUTO and a hand/engine position are mutually exclusive, so flipping EITHER
+        direction with a live position / working order FLATTENS it first for a clean
+        handoff and says so — the switch must never silently no-op. Position
+        ownership maps to the current mode (manual entries are blocked in AUTO and
+        the engine only opens in AUTO), so whatever is live belongs to the mode we
+        are leaving. Returns `note` describing any side effect."""
         with self.lock:
             on = bool(on)
             note = None
-            if on and not self.auto_mode:
-                manual_live = ((self.position is not None and not self.position.get("auto"))
-                               or self.pending is not None)
-                if manual_live:
-                    # close/cancel the open manual trade so AUTO can take over cleanly
-                    pending_only = self.position is None
+            if on != self.auto_mode:
+                # Flatten/cancel the outgoing mode's position so the incoming mode
+                # starts clean. flatten() is defensive (no-ops if already flat), so
+                # a stale position flag can never wedge the switch.
+                pending_only = self.position is None
+                if self.position is not None or self.pending is not None:
                     self.flatten()
-                    note = ("cancelled your working order to enable AUTO" if pending_only
-                            else "flattened your manual position to enable AUTO")
+                    if on:                     # MANUAL -> AUTO
+                        note = ("cancelled your working order to enable AUTO" if pending_only
+                                else "flattened your manual position to enable AUTO")
+                    else:                      # AUTO -> MANUAL
+                        note = ("cancelled the working order to switch to MANUAL" if pending_only
+                                else "flattened the auto position to switch to MANUAL")
             self.auto_mode = on
             if not on:
                 self.auto_armed = None         # disarm any pending reclaim buy-stop
