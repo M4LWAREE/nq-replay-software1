@@ -118,7 +118,11 @@ CSV_HEADER = ["order_id", "side", "size", "entry_et", "exit_et",
               "pnl_ticks", "pnl_net", "mfe_ticks", "mae_ticks",
               "hold_s", "stop_tk", "target_tk", "trail_tk", "arm_tk",
               "coinflip_ev_net", "random_time_ev_net", "instrument",
-              "flow_delta_entry"]
+              "flow_delta_entry",
+              # AUTO structure-context audit columns (blank for manual trades)
+              "va_pct", "val", "vah", "daily_poc", "candle_poc", "poc30",
+              "setup_candle_et", "setup_close_vs_val", "entry_vs_val_ticks",
+              "target_price", "stop_price", "regime"]
 
 # ── load tick cache (memmap — read only) ─────────────────────────────────────
 print("[replay_trader] loading tick cache (mmap)...")
@@ -875,8 +879,13 @@ class ReplaySession:
         # LONG: candle low pokes below VAL, both POCs confirm inside value (>= VAL)
         if not (c_lo < val and poc_c >= val and poc_30 >= val):
             return
+        # setup-candle CLOSE = last tick price inside [s_c, c); the above/below-VAL
+        # distinction is the fill-audit "order type" (true VAL reclaim vs continuation).
+        setup_close = int(PX[c - 1])
         self.auto_armed = {"val": int(val), "cancel": int(val) - AUTO_STOP_TICKS,
                            "poc_c": int(poc_c), "poc_d": int(poc_d), "vah": int(vah),
+                           "poc_30": int(poc_30), "va_pct": float(self.va_pct),
+                           "setup_close": setup_close, "setup_low": int(c_lo),
                            "expiry_ns": self._auto_end11_ns, "close_ns": int(close_ns)}
         self._log_event("AUTO_ARM", side=1, ns=int(close_ns), idx=c)
 
@@ -902,6 +911,14 @@ class ReplaySession:
             "instrument": self.instrument, "cmult": self.cmult, "comm_rt": self.comm_rt,
             "flow_delta_entry": self._flow_delta(i + 1, ns),
             "auto": True,
+            # decision-time structure context (raw real ticks; displayed/derived in
+            # _close). Captured straight from the armed setup — no recompute drift.
+            "auto_struct": {
+                "va_pct": a["va_pct"], "val": a["val"], "vah": a["vah"],
+                "daily_poc": a["poc_d"], "candle_poc": a["poc_c"], "poc30": a["poc_30"],
+                "setup_close": a["setup_close"], "setup_close_ns": a["close_ns"],
+                "entry_px": int(entry),
+            },
         }
         self.auto_armed = None
         self._log_event("AUTO_ENTRY", side=1, size=1, px=entry, ns=ns, idx=i)
@@ -1099,12 +1116,45 @@ class ReplaySession:
             "instrument": instr,
             "flow_delta_entry": pos.get("flow_delta_entry"),
         }
+        # ── AUTO structure-context audit block (manual trades stay null) ──────────
+        tr.update(self._auto_struct_fields(pos))
         self.trades.append(tr)
         self._ch_on_close(net, exit_px, ns)   # challenge: realized balance / pass / fail
         self._log_event("FILL_EXIT", side=side, size=size, px=exit_px, ns=ns, idx=i,
                         reason=reason, pnl_net=net)
         self._append_trade_csv(tr)
         self._persist_json()
+
+    # canonical order of the AUTO structure-context audit fields (also CSV columns)
+    AUTO_STRUCT_KEYS = ("va_pct", "val", "vah", "daily_poc", "candle_poc", "poc30",
+                        "setup_candle_et", "setup_close_vs_val", "entry_vs_val_ticks",
+                        "target_price", "stop_price", "regime")
+
+    def _auto_struct_fields(self, pos):
+        """Structure-context audit fields for a trade record. Populated only for AUTO
+        trades (manual -> all None) from the decision-time values captured on the
+        position at entry (`pos['auto_struct']`) — no recompute, no drift. Price
+        levels are emitted as DISPLAYED points (same offset as entry_px_disp) so the
+        record is self-consistent and human-auditable; entry_vs_val_ticks stays in
+        raw ticks (offset-invariant)."""
+        s = pos.get("auto_struct")
+        if not pos.get("auto") or s is None:
+            return {k: None for k in self.AUTO_STRUCT_KEYS}
+        val = s["val"]; entry = s["entry_px"]; poc_c = s["candle_poc"]
+        return {
+            "va_pct": s["va_pct"],
+            "val": round(self.disp_px(val), 2),
+            "vah": round(self.disp_px(s["vah"]), 2),
+            "daily_poc": round(self.disp_px(s["daily_poc"]), 2),
+            "candle_poc": round(self.disp_px(poc_c), 2),
+            "poc30": round(self.disp_px(s["poc30"]), 2),
+            "setup_candle_et": self.et_clock(s["setup_close_ns"]),
+            "setup_close_vs_val": "above" if s["setup_close"] >= val else "below",
+            "entry_vs_val_ticks": int(entry - val),
+            "target_price": round(self.disp_px(poc_c), 2),   # = candle POC
+            "stop_price": round(self.disp_px(entry - AUTO_STOP_TICKS), 2),
+            "regime": None,   # engine has no live regime label (decoded post-hoc)
+        }
 
     def _coinflip_ev(self, pos, exit_idx):
         """Coin-flip control: same entry instant, same bracket DISTANCES *and the
@@ -1703,7 +1753,8 @@ class ReplaySession:
                         t["hold_s"], t.get("stop_tk"), t.get("target_tk"),
                         t.get("trail_tk"), t.get("arm_tk"),
                         t["coinflip_ev_net"], t.get("random_time_ev_net"),
-                        t.get("instrument"), t.get("flow_delta_entry")])
+                        t.get("instrument"), t.get("flow_delta_entry")]
+                       + [t.get(k) for k in self.AUTO_STRUCT_KEYS])
 
     def _persist_json(self):
         # Always stamp the (frozen-if-past-09:35) opening-range width into the
