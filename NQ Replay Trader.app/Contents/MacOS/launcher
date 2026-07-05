@@ -1,0 +1,7 @@
+#!/bin/bash
+# NQ Replay Trader.app — thin wrapper. Opens Terminal running the repo's
+# run_mac.command so setup/run progress is visible, then the browser opens.
+DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+CMD="$DIR/run_mac.command"
+chmod +x "$CMD" 2>/dev/null || true
+open -a Terminal "$CMD"

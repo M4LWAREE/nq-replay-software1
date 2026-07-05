@@ -46,6 +46,8 @@ except Exception:  # pragma: no cover
 
 from flask import Flask, jsonify, request, send_from_directory
 
+import ict_engine   # causal ICT/TJR structure detection (centralized, tunable params)
+
 # ── paths / constants ────────────────────────────────────────────────────────
 HERE = Path(__file__).resolve().parent
 CACHE = HERE.parent / "tick_engine" / "cache"
@@ -59,6 +61,44 @@ TICK_VALUE = 5.0           # $ per tick per contract (NQ mini)
 COMMISSION_RT = 4.20       # $ round-trip per contract (NQ mini)
 MICRO_COMM_RT = 1.30       # $ round-trip per contract (MNQ micro — NOT COMMISSION_RT*0.1)
 DEFAULT_SLIP_TK = 1        # adverse slip ticks on market / stop fills
+
+# LIQUIDITY POOLS — a "touch" is price coming within LIQ_TOUCH_TK ticks of a MAIN pool
+# (PDH/PDL/ONH/ONL/ORH/ORL/PWH/PWL/HOD/LOD). Crossing a level passes through the zone so
+# it is captured too. The touch-nav seeks to the EXACT moment of the touch.
+LIQ_TOUCH_TK = 2                                   # within this many ticks of a pool = touch
+LIQ_TOUCH_COOLDOWN_NS = 5 * 60 * 1_000_000_000     # collapse repeat touches of the SAME pool
+                                                   # within this window (chop along a level = 1)
+# RSI CONFLUENCE — a touch is only surfaced if RSI(14) is at an extreme near the touch:
+# it must have hit overbought (>=70) or oversold (<=30) within ±LIQ_RSI_WINDOW_NS of the
+# touch (i.e. RSI already there at the touch, or reaches it within 5 min after). RSI is
+# computed on the SAME timeframe the chart shows (the client passes tf). RSI is invariant
+# to the display offset, so it is computed on the raw tick prices.
+LIQ_RSI_PERIOD = 14
+LIQ_RSI_OB = 70.0
+LIQ_RSI_OS = 30.0
+LIQ_RSI_WINDOW_NS = 5 * 60 * 1_000_000_000         # RSI extreme must fall within ±this of touch
+
+# ── ZIGZAG++ (MT4-style, Dev Lucem "ZigZag++ [LD]") ─────────────────────────────
+# Defaults for the alternating swing-high/low zigzag. Depth = lookback bars for the
+# pivot scan; Deviation = min move (in TICKS, ≈ MT4's ExtDeviation×Point) to register a
+# new leg; Backstep = min bars between pivots. Computed on the displayed-TF bars up to
+# the cursor (causal); the last leg repaints as price extends (expected for a zigzag).
+ZZ_DEPTH = 12
+ZZ_DEVIATION_TK = 5        # ticks (MT4 Deviation in mintick units; 5tk = 1.25 NQ points)
+ZZ_BACKSTEP = 2
+
+# DATE-REVEAL — when ON, the session's real calendar date is exposed in the snapshot
+# (field "session_date") so the user can look up that day's economic releases for news
+# trading. OFF by default -> blinding intact, no date leaks anywhere. Enabled by env
+# REVEAL_DATE=1 or the --reveal-date CLI flag (main() may flip this global on at boot).
+REVEAL_DATE = os.getenv("REVEAL_DATE", "").strip().lower() in ("1", "true", "yes", "on")
+
+# PRE-OPEN CONTEXT — bars are rendered back to this ET time the PRIOR evening (Globex
+# open) so the overnight/pre-market lead-up is visible BEFORE playback. Playback still
+# starts paused at the 09:30 RTH open (start_idx/cursor unchanged); these bars are all
+# BEFORE the cursor, so no-lookahead is preserved. Clamped to the session's own data
+# (full_start, ~00:00 ET in this cache), so it shows all available overnight.
+PRE_OPEN_FROM_ET = (18, 0)        # (hour, minute) ET the prior evening; easy to change
 
 
 def _instr_econ(instrument):
@@ -87,6 +127,17 @@ FLOW_THRESH = 50                  # contracts; |delta| >= this -> colored pill
 OPEN_HEAT_QUIET = 250             # < this tk -> GREEN "quiet — your tape"
 OPEN_HEAT_HOT = 400               # > this tk -> RED "heat protocol"; 250-400 AMBER
 
+# TAPE REGIME — rolling variance ratio over the trailing 30 min: VR = var(5-min
+# returns) / (5 × var(1-min returns)) on 1-min closes. <1 = mean-reverting (Parag's
+# VA-fade habitat), ~1 = random walk, >1 = trending/extending (his method dies).
+# A regime read for his discretion, NOT a signal. Needs ≥ TAPE_MIN_CLOSES one-min
+# closes; before that it is "warming". One source of truth — thresholds sent in the
+# snapshot.
+TAPE_WINDOW_NS = 30 * 60 * 1_000_000_000   # 30 min in nanoseconds
+TAPE_MIN_CLOSES = 15              # one-min closes needed before VR is reported
+TAPE_VR_FADE = 0.9               # VR < this -> GREEN "FADE-ABLE" (mean-reverting)
+TAPE_VR_TREND = 1.1              # VR > this -> RED "EXTENDING"; 0.9-1.1 GREY NEUTRAL
+
 # Neutral synthetic date so the x-axis shows real ET time-of-day but NO real date.
 SYNTH_BASE = 1577836800    # 2020-01-01 00:00:00 UTC (epoch seconds)
 
@@ -95,7 +146,7 @@ CSV_HEADER = ["order_id", "side", "size", "entry_et", "exit_et",
               "pnl_ticks", "pnl_net", "mfe_ticks", "mae_ticks",
               "hold_s", "stop_tk", "target_tk", "trail_tk", "arm_tk",
               "coinflip_ev_net", "random_time_ev_net", "instrument",
-              "flow_delta_entry"]
+              "flow_delta_entry", "tape_vr_entry"]
 
 # ── load tick cache (memmap — read only) ─────────────────────────────────────
 print("[replay_trader] loading tick cache (mmap)...")
@@ -116,6 +167,47 @@ GOOD_SESSIONS = [s for s in ALL_SESSIONS if s["rth_ticks"] >= 5000]
 print(f"[replay_trader] {len(GOOD_SESSIONS)} replayable sessions")
 
 N_RESAMPLE = 128           # random-time control draws per trade
+
+# date -> position in ALL_SESSIONS (date-sorted). Used to find a chosen session's
+# prior trading days (PDH/PDL, recent dailies) and prior week (PWH/PWL) — all of
+# which are formed BEFORE the session and so are causal from the first RTH tick.
+_SESS_BY_DATE = {s["date"]: i for i, s in enumerate(ALL_SESSIONS)}
+
+
+def _prior_rth_sessions(date, k):
+    """The up-to-`k` most recent trading days (with real RTH) strictly before `date`,
+    most-recent first. Their RTH high/low give PDH/PDL and the recent dailies."""
+    pos = _SESS_BY_DATE.get(date)
+    if pos is None:
+        return []
+    out = []
+    j = pos - 1
+    while j >= 0 and len(out) < k:
+        if ALL_SESSIONS[j].get("rth_ticks", 0) > 0:
+            out.append(ALL_SESSIONS[j])
+        j -= 1
+    return out
+
+
+def _prior_week_range(date):
+    """(high, low) integer real ticks of the immediately-PRIOR ISO week's RTH range
+    across all trading days in that week, or None if none are in the cache."""
+    d = pd.Timestamp(date)
+    pw = (d - pd.Timedelta(days=7)).isocalendar()
+    highs = []
+    lows = []
+    for s in ALL_SESSIONS:
+        if s.get("rth_ticks", 0) <= 0:
+            continue
+        ic = pd.Timestamp(s["date"]).isocalendar()
+        if (ic[0], ic[1]) == (pw[0], pw[1]):
+            seg = np.asarray(PX[int(s["rth_start"]):int(s["rth_end"])], dtype=np.int64)
+            if len(seg):
+                highs.append(int(seg.max()))
+                lows.append(int(seg.min()))
+    if highs:
+        return max(highs), min(lows)
+    return None
 
 # Supported chart timeframes -> bucket seconds. Single source of truth for tf
 # parsing across /api/bars, /api/footprint, /api/volprofile. The incremental
@@ -280,6 +372,106 @@ def coin_ev_path(path, entry_tick, tdist, sdist, size, slip, trail_tk=None, arm_
     return 0.5 * (outs[0] + outs[1])
 
 
+def _wilder_rsi(closes, period=14):
+    """Wilder's RSI over a close array → array same length (NaN before the first value).
+    Matches the client's incremental RSI: seed = simple average of the first `period`
+    changes, then smoothed. `gain[i-1]`/`loss[i-1]` is the change INTO bar i."""
+    n = len(closes)
+    rsi = np.full(n, np.nan)
+    if n <= period:
+        return rsi
+    delta = np.diff(closes)
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
+    ag = float(gain[:period].mean())
+    al = float(loss[:period].mean())
+    rsi[period] = 100.0 if al == 0 else 100.0 - 100.0 / (1.0 + ag / al)
+    for i in range(period + 1, n):
+        ag = (ag * (period - 1) + gain[i - 1]) / period
+        al = (al * (period - 1) + loss[i - 1]) / period
+        rsi[i] = 100.0 if al == 0 else 100.0 - 100.0 / (1.0 + ag / al)
+    return rsi
+
+
+def _mt4_zigzag(highs, lows, depth, deviation, backstep):
+    """Faithful forward-orientation port of the MT4 ZigZag (the algorithm the Dev Lucem
+    'ZigZag++ [LD]' Pine v5 reproduces). `highs`/`lows` are bar arrays oldest→newest;
+    `deviation` is in the SAME price units as highs/lows. Two stages: (1) map candidate
+    local highs/lows over a `depth`-bar window with a `deviation` gate + `backstep`
+    pruning; (2) walk forward keeping ALTERNATING H/L pivots (extending a leg if a more
+    extreme point appears). Returns [(idx, price, 'H'|'L'), …] in time order — the last
+    leg can still move as later bars arrive (repaint, expected for a zigzag)."""
+    n = len(highs)
+    if n < depth + 1:
+        return []
+    hi_map = [0.0] * n          # candidate high price at i (0 = none)
+    lo_map = [0.0] * n          # candidate low price at i
+    zz = [0.0] * n              # final pivot price at i (0 = none)
+    # ---- stage 1: candidate extremes ----
+    last_low = 0.0
+    last_high = 0.0
+    for i in range(n):
+        w = max(0, i - depth + 1)
+        # low candidate
+        val = min(lows[w:i + 1])
+        if val == last_low:
+            val = 0.0
+        else:
+            last_low = val
+            if (lows[i] - val) > deviation:
+                val = 0.0
+            else:
+                for back in range(1, backstep + 1):
+                    j = i - back
+                    if j >= 0 and lo_map[j] != 0.0 and lo_map[j] > val:
+                        lo_map[j] = 0.0
+        lo_map[i] = val if lows[i] == val else 0.0
+        # high candidate (mirror)
+        val = max(highs[w:i + 1])
+        if val == last_high:
+            val = 0.0
+        else:
+            last_high = val
+            if (val - highs[i]) > deviation:
+                val = 0.0
+            else:
+                for back in range(1, backstep + 1):
+                    j = i - back
+                    if j >= 0 and hi_map[j] != 0.0 and hi_map[j] < val:
+                        hi_map[j] = 0.0
+        hi_map[i] = val if highs[i] == val else 0.0
+    # ---- stage 2: alternating selection ----
+    look = 0                    # 0 = init, 1 = in down-leg (last pivot LOW), -1 = up-leg
+    last_high = -1.0; last_low = -1.0; last_high_pos = -1; last_low_pos = -1
+    ztype = {}
+    for i in range(n):
+        if look == 0:
+            if last_low < 0 and last_high < 0:
+                if hi_map[i] != 0.0:
+                    last_high = highs[i]; last_high_pos = i; look = -1
+                    zz[i] = last_high; ztype[i] = "H"
+                if lo_map[i] != 0.0:
+                    last_low = lows[i]; last_low_pos = i; look = 1
+                    zz[i] = last_low; ztype[i] = "L"
+        elif look == 1:         # last pivot was a LOW
+            if lo_map[i] != 0.0 and lo_map[i] < last_low and hi_map[i] == 0.0:
+                zz[last_low_pos] = 0.0; ztype.pop(last_low_pos, None)
+                last_low_pos = i; last_low = lo_map[i]
+                zz[i] = last_low; ztype[i] = "L"
+            if hi_map[i] != 0.0 and lo_map[i] == 0.0:
+                last_high = hi_map[i]; last_high_pos = i
+                zz[i] = last_high; ztype[i] = "H"; look = -1
+        elif look == -1:        # last pivot was a HIGH
+            if hi_map[i] != 0.0 and hi_map[i] > last_high and lo_map[i] == 0.0:
+                zz[last_high_pos] = 0.0; ztype.pop(last_high_pos, None)
+                last_high_pos = i; last_high = hi_map[i]
+                zz[i] = last_high; ztype[i] = "H"
+            if lo_map[i] != 0.0 and hi_map[i] == 0.0:
+                last_low = lo_map[i]; last_low_pos = i
+                zz[i] = last_low; ztype[i] = "L"; look = 1
+    return [(i, zz[i], ztype[i]) for i in range(n) if zz[i] != 0.0 and i in ztype]
+
+
 # ── the replay session ───────────────────────────────────────────────────────
 class ReplaySession:
     """Server-authoritative replay state. One active session at a time.
@@ -291,7 +483,7 @@ class ReplaySession:
     in true print order (honest fills).
     """
 
-    def __init__(self, mode="rth", slip_tk=DEFAULT_SLIP_TK):
+    def __init__(self, mode="rth", slip_tk=DEFAULT_SLIP_TK, date=None):
         self.lock = threading.RLock()
         self.id = datetime.now().strftime("%Y%m%d_%H%M%S_") + secrets.token_hex(3)
         self.mode = mode
@@ -299,15 +491,29 @@ class ReplaySession:
         self.instrument = "mini"   # "mini" (NQ) or "micro" (MNQ); new_session may carry over
         self.cmult, self.comm_rt = _instr_econ("mini")
 
-        sess = secrets.choice(GOOD_SESSIONS)
-        self._hidden_date = sess["date"]  # NEVER sent to client
+        # REVIEW MODE (date given) — load a SPECIFIC day (e.g. the RSI+BB loser navigator)
+        # instead of a random blinded one; prices are shown UNBLINDED (offset 0) so the
+        # tape matches reality. Random sessions stay blinded as before.
+        self._review = date is not None
+        if self._review:
+            pos = _SESS_BY_DATE.get(date)
+            sess = ALL_SESSIONS[pos] if pos is not None else secrets.choice(GOOD_SESSIONS)
+        else:
+            sess = secrets.choice(GOOD_SESSIONS)
+        self._hidden_date = sess["date"]  # NEVER sent to client (unless REVEAL_DATE)
         if mode == "full":
             self.start_idx = int(sess["full_start"]); self.end_idx = int(sess["full_end"])
+            self.view_start_idx = self.start_idx     # already starts at the Globex open
         else:
             self.start_idx = int(sess["rth_start"]); self.end_idx = int(sess["rth_end"])
+            # PRE-OPEN CONTEXT: render bars back to the overnight open while playback
+            # still starts at 09:30 (start_idx). Bars build from view_start_idx; the
+            # cursor / counterfactuals / VWAP / open-heat all stay anchored at 09:30.
+            self.view_start_idx = self._compute_view_start(sess)
 
         # blinding price offset (integer ticks). Keeps prices positive & plausible.
-        self.px_offset = int(secrets.randbelow(16001) - 8000)  # +-2000 points
+        # Review (date-loaded) sessions use offset 0 -> real prices for honest replay.
+        self.px_offset = 0 if self._review else int(secrets.randbelow(16001) - 8000)  # +-2000 points
 
         self.cursor = self.start_idx + 1        # first tick is "seen" to seed a price
         self.replay_now_ns = int(TS[self.start_idx])
@@ -332,6 +538,7 @@ class ReplaySession:
         self.next_order_id = 1
         self.trades = []            # closed trades (each a dict)
         self.events = []            # raw order/fill log rows
+        self.play_pause_events = [] # play/pause toggles + instant microstructure (catcher)
 
         # incremental bar cache, keyed by tf_sec. Each entry keeps the committed
         # (sealed) bars + the forming accumulator so each poll only processes
@@ -345,6 +552,26 @@ class ReplaySession:
         # [start:cursor] only. Only ever populated when the client has the
         # footprint toggle ON and hits /api/footprint -> zero overhead when OFF.
         self._fp_cache = {}
+
+        # ICT/TJR — lazily-computed full-session setup table (jump-to-setup) + the
+        # "only allow entry near a setup" gate. Setups are a navigation index over
+        # the whole RTH session; the LIVE structure overlay is computed causally
+        # (bars up to the cursor) in active_structures().
+        self._setups_cache = None
+        self._detect_cache = None        # incremental 1-min bars (with ns/idx/mod) for live overlay
+        # LIQUIDITY POOLS — the date-anchored fixed pools (PDH/PDL, recent dailies,
+        # PWH/PWL) and the full-session touch index are both cursor-independent, so
+        # they are computed once and cached per session. `rth_start_idx` is the 09:30
+        # RTH open tick (== start_idx in rth mode; the inner open in full mode); the
+        # 10:00 ET opening-range close index is resolved lazily into `_or_end`.
+        self.rth_start_idx = int(sess["rth_start"]) if int(sess.get("rth_ticks", 0)) > 0 else self.start_idx
+        self._or_end = None
+        self._pools_static_cache = None
+        self._raw_touches_cache = None   # TF-independent touch events (price proximity)
+        self._touches_cache = {}         # RSI-filtered touch list, keyed by tf_sec
+        self._rsi_cache = {}             # (end_ns, rsi) full-session RSI, keyed by tf_sec
+        self.setup_only = False
+        self._setup_gate_sec = 12 * 60   # entry allowed within ±this of a setup time
 
         # cumulative stats helpers
         self._csv_path = SESSIONS_DIR / f"session_{self.id}.csv"
@@ -372,6 +599,19 @@ class ReplaySession:
     def et_clock(self, ns):
         et = pd.Timestamp(ns, tz="UTC").tz_convert(ET)
         return et.strftime("%H:%M:%S")
+
+    def _compute_view_start(self, sess):
+        """Index of ~PRE_OPEN_FROM_ET (default 18:00 ET) the evening BEFORE the RTH
+        date — the overnight lead-in shown as context. CLAMPED to the session's own
+        data [full_start, rth_start], so it never crosses into another day and falls
+        back to the earliest available overnight tick (~00:00 ET in this cache)."""
+        full_start = int(sess["full_start"]); rth_start = int(sess["rth_start"])
+        d = pd.Timestamp(self._hidden_date)            # RTH calendar date
+        eve = (pd.Timestamp(year=d.year, month=d.month, day=d.day,
+                            hour=PRE_OPEN_FROM_ET[0], minute=PRE_OPEN_FROM_ET[1], tz=ET)
+               - pd.Timedelta(days=1))                 # prior evening
+        idx = int(np.searchsorted(TS, int(eve.value), side="left"))
+        return max(full_start, min(idx, rth_start))
 
     # ---- advancement / honest fill engine ----
     def _cur_price(self):
@@ -462,6 +702,140 @@ class ReplaySession:
             return None
         return round(self.disp_px(self._vwap_pv / self._vwap_v), 2)
 
+    # ---- play/pause catcher: instant microstructure + event logging ----
+    def _rsi_at_cursor(self, now_ns):
+        """RSI(14) on 1-min closes at the last bar that closed at/before the cursor —
+        causal (RSI[i] depends only on closes up to i). Reuses the cached full-session
+        RSI series. None until 14 bars exist."""
+        try:
+            end_ns, rsi = self._rsi_series(60)
+            if len(end_ns) == 0:
+                return None
+            k = int(np.searchsorted(end_ns, now_ns, side="right")) - 1
+            if k < 0:
+                return None
+            v = float(rsi[k])
+            return None if v != v else round(v, 1)   # NaN-safe
+        except Exception:
+            return None
+
+    def _micro_features(self, hi_idx, now_ns):
+        """Instant CAUSAL microstructure at the cursor — sub-second Δprice / tick velocity
+        / micro-volatility, last-move direction, VWAP distance, RSI(14). Reads only ticks
+        in [start_idx, hi_idx) (≤ cursor). All price deltas/ranges in signed integer TICKS
+        (offset-invariant); std in ticks; vwap distance in ticks."""
+        lo = self.start_idx
+        cur = int(PX[hi_idx - 1])
+        seg_ts = np.asarray(TS[lo:hi_idx], dtype=np.int64)
+        n_seen = hi_idx - lo
+        NS = 1_000_000   # ns per ms
+
+        def px_ago(ms):   # price at the last seen tick with TS <= now-ms (None if pre-start)
+            k = int(np.searchsorted(seg_ts, now_ns - ms * NS, side="right")) - 1
+            return None if k < 0 else int(PX[lo + k])
+
+        def count_since(ms):   # number of prints in the last `ms`
+            k = int(np.searchsorted(seg_ts, now_ns - ms * NS, side="left"))
+            return int(n_seen - k)
+
+        def win_px(ms):        # seen prices over the last `ms`
+            k = int(np.searchsorted(seg_ts, now_ns - ms * NS, side="left"))
+            return np.asarray(PX[lo + k:hi_idx], dtype=np.float64)
+
+        f = {}
+        for ms, key in ((100, "dpx_100ms"), (250, "dpx_250ms"), (500, "dpx_500ms"),
+                        (1000, "dpx_1s"), (2000, "dpx_2s")):
+            p = px_ago(ms)
+            f[key] = None if p is None else int(cur - p)            # signed ticks
+        f["prints_250ms"] = count_since(250)
+        f["prints_1s"] = count_since(1000)
+        f["ticks_per_sec"] = f["dpx_1s"]                           # net ticks moved over last 1s
+        for ms, rkey, skey in ((500, "range_500ms", "std_500ms"),
+                               (1000, "range_1s", "std_1s"),
+                               (2000, "range_2s", "std_2s")):
+            seg = win_px(ms)
+            if len(seg) >= 1:
+                f[rkey] = int(seg.max() - seg.min())
+                f[skey] = round(float(seg.std()), 2) if len(seg) >= 2 else 0.0
+            else:
+                f[rkey] = None
+                f[skey] = None
+        d = f["dpx_250ms"] if f["dpx_250ms"] else (f["dpx_1s"] or 0)   # last micro-move sign
+        f["last_move_dir"] = 1 if d > 0 else (-1 if d < 0 else 0)
+        vwap = self._vwap(hi_idx)
+        f["vwap_dist_tk"] = None if vwap is None else round((self.disp_px(cur) - vwap) / TICK_SIZE, 1)
+        f["rsi14"] = self._rsi_at_cursor(now_ns)
+        return f
+
+    def _log_play_pause(self, kind):
+        """Append a play/pause toggle event (kind in {play,pause}) with the cursor tick
+        index + replay ET + display price + instant causal microstructure, then persist
+        so it survives autosave / End. Causal + blinded (no date)."""
+        hi = self.cursor
+        if hi <= self.start_idx:
+            return
+        now_ns = self.replay_now_ns
+        cur = int(PX[hi - 1])
+        ev = {
+            "kind": kind,
+            "wall": round(time.time(), 3),
+            "cursor_idx": int(hi),
+            "et": self.et_clock(now_ns),
+            "synth_t": int(self.synth_time(now_ns)),
+            "price": round(self.disp_px(cur), 2),
+            "pre_entry": False,
+            "order_id": None,
+        }
+        ev.update(self._micro_features(hi, now_ns))
+        self.play_pause_events.append(ev)
+        self._persist_json()
+
+    def _tag_pre_entry(self, oid, window_s=10.0):
+        """If an order entry follows a PAUSE within `window_s` WALL seconds, tag that
+        pause `pre_entry=True` + store the order_id — isolating the pause-before-entry
+        moments. Tags the most recent qualifying pause only."""
+        now = time.time()
+        for ev in reversed(self.play_pause_events):
+            if (now - ev["wall"]) > window_s:
+                break
+            if ev["kind"] == "pause":
+                ev["pre_entry"] = True
+                ev["order_id"] = oid
+                self._persist_json()
+                return
+
+    def _tape_vr(self, hi_idx, now_ns):
+        """TAPE REGIME variance ratio over the trailing 30 min of SEEN ticks:
+        VR = var(5-min returns) / (5 · var(1-min returns)), on 1-min closes built
+        from ticks in [now-30min, now). <1 mean-reverts, ~1 random walk, >1 trends.
+        NO LOOKAHEAD: bounded strictly to indices [start_idx, hi_idx) (hi_idx = the
+        cursor) and TS >= now-30min. Returns None while WARMING (< TAPE_MIN_CLOSES
+        one-min closes) or if the tape is flat (zero 1-min variance). Cheap: one
+        searchsorted + a couple vectorized passes over ~30 min of ticks."""
+        if hi_idx <= self.start_idx:
+            return None
+        lo_ns = now_ns - TAPE_WINDOW_NS
+        lo = int(np.searchsorted(TS[self.start_idx:hi_idx], lo_ns, side="left")) + self.start_idx
+        if lo >= hi_idx:
+            return None
+        ts = np.asarray(TS[lo:hi_idx], dtype=np.int64)
+        px = np.asarray(PX[lo:hi_idx], dtype=np.float64)
+        minute = ts // 60_000_000_000                      # integer 1-min bucket
+        # close of each 1-min bucket = price at the LAST tick of each run (ts sorted)
+        last_of_run = np.append(np.nonzero(np.diff(minute))[0], len(minute) - 1)
+        closes = px[last_of_run]
+        if len(closes) < TAPE_MIN_CLOSES:
+            return None                                    # warming
+        r1 = np.diff(closes)                               # 1-min returns
+        r5 = closes[5:] - closes[:-5]                      # overlapping 5-min returns
+        if len(r1) < 2 or len(r5) < 2:
+            return None
+        v1 = float(np.var(r1, ddof=1))
+        v5 = float(np.var(r5, ddof=1))
+        if v1 <= 0.0:
+            return None                                    # flat tape -> undefined
+        return round(v5 / (5.0 * v1), 3)
+
     def advance(self):
         """Advance the replay clock to wall-now and process ticks honestly."""
         with self.lock:
@@ -532,6 +906,9 @@ class ReplaySession:
             # seen at fill -> hi-bound i+1). Logged ALWAYS, independent of the
             # client Flow toggle, since it is part of the science record.
             "flow_delta_entry": self._flow_delta(i + 1, ns),
+            # TAPE REGIME: variance ratio AS OF the fill (always logged, toggle-
+            # independent) so the regime gate can be forward-validated per trade.
+            "tape_vr_entry": self._tape_vr(i + 1, ns),
         }
         self.position = pos
         self._log_event("FILL_ENTRY", side=side, size=o["size"], px=fill, ns=ns, idx=i)
@@ -625,6 +1002,7 @@ class ReplaySession:
             "random_time_ev_net": round(rt, 2),
             "instrument": instr,
             "flow_delta_entry": pos.get("flow_delta_entry"),
+            "tape_vr_entry": pos.get("tape_vr_entry"),
         }
         self.trades.append(tr)
         self._log_event("FILL_EXIT", side=side, size=size, px=exit_px, ns=ns, idx=i,
@@ -732,6 +1110,8 @@ class ReplaySession:
                 return {"ok": False, "err": "session ended"}
             if self.position is not None or self.pending is not None:
                 return {"ok": False, "err": "one position at a time"}
+            if self.setup_only and not self._near_setup():
+                return {"ok": False, "err": "setup-only: no TJR setup near this time"}
             size = max(1, int(size))
             # Brackets are TICK OFFSETS from the actual fill price; the absolute
             # stop/target prices are computed in _fill_market once we know the fill.
@@ -746,6 +1126,7 @@ class ReplaySession:
                             "stop": None, "target": None}
             self._log_event("ORDER", side=side, size=size, ns=self.replay_now_ns,
                             idx=self.cursor)
+            self._tag_pre_entry(oid)   # link a recent pause to this entry (pre-entry tag)
             return {"ok": True, "order_id": oid}
 
     def modify(self, stop_tk="__keep__", target_tk="__keep__",
@@ -812,11 +1193,18 @@ class ReplaySession:
 
     def set_paused(self, p):
         with self.lock:
+            p = bool(p)
+            changed = (p != self.paused)
             if not p and self.paused:
                 self.last_wall = time.time()  # reset so paused time doesn't accrue
             else:
                 self.advance()
-            self.paused = bool(p)
+            self.paused = p
+            # PLAY/PAUSE CATCHER — log the toggle + instant causal microstructure at the
+            # cursor. Only on a real state change (button + spacebar both route here via
+            # /api/control), so we capture every user toggle exactly once.
+            if changed:
+                self._log_play_pause("pause" if p else "play")
 
     def jump(self, seconds):
         """Fast-forward replay clock by `seconds` (replay time)."""
@@ -889,10 +1277,12 @@ class ReplaySession:
         c["times"].append(int(bucket))
 
     def _ensure_bars(self, tf_sec):
-        """Bring the tf cache up to `cursor`, processing only NEW ticks."""
+        """Bring the tf cache up to `cursor`, processing only NEW ticks. Bars build
+        from view_start_idx (the overnight open) so the pre-09:30 context is visible;
+        the upper bound is the cursor, so no post-cursor tick is ever shown."""
         c = self._bar_cache.get(tf_sec)
         if c is None or c["built_to"] > self.cursor:
-            c = {"built_to": self.start_idx, "bars": [], "times": [],
+            c = {"built_to": self.view_start_idx, "bars": [], "times": [],
                  "cur_bucket": None, "cur": None}
             self._bar_cache[tf_sec] = c
         lo = c["built_to"]; hi = self.cursor
@@ -941,6 +1331,417 @@ class ReplaySession:
             if forming_bar is not None and (since_synth is None or forming_bar["time"] >= since_synth):
                 bars = bars + [forming_bar]
             return bars
+
+    # ---- ZigZag++ (MT4-style alternating swings) ----
+    def zigzag(self, tf_sec, depth, deviation_tk, backstep):
+        """MT4-style ZigZag++ pivots over the DISPLAYED-TF bars up to the cursor —
+        CAUSAL (only bars before the cursor) and blinded (display-offset prices). Each
+        pivot is labeled HH/HL/LH/LL vs the prior SAME-type pivot (the Pine nowPoint
+        logic). The last leg repaints as price extends (expected). Reuses build_bars,
+        so it respects the 5s/1m TF toggle and the incremental bar cache."""
+        bars = self.build_bars(tf_sec)
+        if len(bars) < int(depth) + 1:
+            return []
+        highs = [b["high"] for b in bars]
+        lows = [b["low"] for b in bars]
+        times = [b["time"] for b in bars]
+        dev_pts = max(0.0, float(deviation_tk)) * TICK_SIZE   # Deviation: ticks -> points
+        piv = _mt4_zigzag(highs, lows, int(depth), dev_pts, int(backstep))
+        out = []
+        last_h = None
+        last_l = None
+        for (i, price, typ) in piv:
+            if typ == "H":
+                label = "HH" if (last_h is None or price > last_h) else "LH"
+                last_h = price
+                side = "high"
+            else:
+                label = "LL" if (last_l is None or price < last_l) else "HL"
+                last_l = price
+                side = "low"
+            out.append({"t": int(times[i]), "price": round(price, 2),
+                        "type": side, "label": label})
+        return out
+
+    # ---- ICT/TJR detection bars + structure/setup engine ----
+    def _detect_bars(self, lo_idx, hi_idx, tf_sec):
+        """OHLC bars (DISPLAY points, so overlays align with the chart) over ticks
+        [lo_idx, hi_idx) for the ICT engine. Each bar carries its last print's real
+        ns + tick index (so a setup maps back to a cursor position) and ET minute-of-
+        day (killzone gating). Vectorized groupby — fast enough for a full-session
+        scan. NO-LOOKAHEAD is the caller's responsibility (pass hi_idx = cursor for
+        the live overlay, end_idx only for the jump-to-setup index)."""
+        if hi_idx <= lo_idx:
+            return []
+        ts = np.asarray(TS[lo_idx:hi_idx], dtype=np.int64)
+        px = np.asarray(PX[lo_idx:hi_idx], dtype=np.int64)
+        et = pd.DatetimeIndex(pd.to_datetime(ts, utc=True)).tz_convert(ET)
+        sec = (et.hour * 3600 + et.minute * 60 + et.second).to_numpy().astype(np.int64)
+        base_norm = pd.Timestamp(self.session_start_ns, tz="UTC").tz_convert(ET).normalize()
+        day_off = (et.normalize() - base_norm).days.to_numpy().astype(np.int64)
+        synth = SYNTH_BASE + sec + day_off * 86400
+        bucket = (synth // tf_sec) * tf_sec
+        df = pd.DataFrame({"bk": bucket, "px": px, "ts": ts, "mod": sec // 60,
+                           "idx": np.arange(lo_idx, hi_idx, dtype=np.int64)})
+        g = df.groupby("bk", sort=True)
+        o = g["px"].first(); h = g["px"].max(); l = g["px"].min(); c = g["px"].last()
+        lastns = g["ts"].last(); lastidx = g["idx"].last(); firstmod = g["mod"].first()
+        out = []
+        for bk in o.index:
+            out.append({"t": int(bk),
+                        "o": round(self.disp_px(int(o[bk])), 2),
+                        "h": round(self.disp_px(int(h[bk])), 2),
+                        "l": round(self.disp_px(int(l[bk])), 2),
+                        "c": round(self.disp_px(int(c[bk])), 2),
+                        "ns": int(lastns[bk]), "idx": int(lastidx[bk]),
+                        "mod": int(firstmod[bk])})
+        return out
+
+    def setups(self):
+        """Full-session TJR setup table (cached). Intentionally scans the whole RTH
+        session — this is a jump-to-setup navigation index, not a live signal. The
+        heavy scan runs WITHOUT the session lock (it only reads immutable session
+        bounds / offset) so it can't stall the tape; only the cache write is locked."""
+        if self._setups_cache is not None:
+            return self._setups_cache
+        tf = ict_engine.ICT_PARAMS["detection_tf_sec"]
+        bars = self._detect_bars(self.start_idx, self.end_idx, tf)
+        res = ict_engine.find_setups(bars)
+        with self.lock:
+            if self._setups_cache is None:
+                self._setups_cache = res
+            return self._setups_cache
+
+    # ---- liquidity pools (labeled levels + touch navigation) ----
+    def _range_hl(self, lo, hi):
+        """(high, low) integer real ticks of PX over [lo, hi), or None if empty.
+        Caller guarantees no-lookahead by passing hi <= cursor (overlay) or a fixed
+        past frontier (frozen pools / touch index)."""
+        lo = max(0, int(lo)); hi = int(hi)
+        if hi <= lo:
+            return None
+        seg = np.asarray(PX[lo:hi], dtype=np.int64)
+        return int(seg.max()), int(seg.min())
+
+    def _or_end_idx(self):
+        """Tick index of the 10:00 ET opening-range close for this session (cached).
+        Minute boundaries align UTC↔ET so a direct searchsorted on TS is exact."""
+        if self._or_end is None:
+            e = pd.Timestamp(f"{self._hidden_date} 10:00:00", tz=ET)
+            self._or_end = int(np.searchsorted(TS, int(e.value), side="left"))
+        return self._or_end
+
+    def _static_pools(self):
+        """Date-anchored fixed pools — prior-day high/low (PDH/PDL), two more recent
+        dailies, and prior-week high/low (PWH/PWL). All formed BEFORE the session, so
+        they are valid (causal) from the first RTH tick. Cached; integer real ticks +
+        formed_idx = rth open. Empty list if this session has no prior data in cache."""
+        if self._pools_static_cache is not None:
+            return self._pools_static_cache
+        pools = []
+        names = [("PDH", "PDL"), ("2D H", "2D L"), ("3D H", "3D L")]
+        for k, ps in enumerate(_prior_rth_sessions(self._hidden_date, 3)):
+            hl = self._range_hl(int(ps["rth_start"]), int(ps["rth_end"]))
+            if hl is None:
+                continue
+            hi, lo = hl
+            hn, ln = names[k] if k < len(names) else (f"{k + 1}D H", f"{k + 1}D L")
+            pools.append({"px_real": hi, "label": hn, "cat": "daily", "side": "high", "prio": 1})
+            pools.append({"px_real": lo, "label": ln, "cat": "daily", "side": "low", "prio": 1})
+        pw = _prior_week_range(self._hidden_date)
+        if pw is not None:
+            pools.append({"px_real": pw[0], "label": "PWH", "cat": "weekly", "side": "high", "prio": 2})
+            pools.append({"px_real": pw[1], "label": "PWL", "cat": "weekly", "side": "low", "prio": 2})
+        for p in pools:
+            p["formed_idx"] = self.rth_start_idx
+        self._pools_static_cache = pools
+        return pools
+
+    @staticmethod
+    def _merge_levels(raw):
+        """Collapse near-coincident levels (within ~2 ticks) into ONE labeled level,
+        keeping the most-significant (lowest-prio) category/side and joining the tags
+        with '·' (e.g. ORH·HOD when the opening-range high == the session high). Keeps
+        the level list short and the labels non-overlapping. `raw` rows are
+        [disp_price, label, cat, side, prio]."""
+        raw.sort(key=lambda r: (r[4], r[0]))     # most-significant first, then price
+        tol = 2 * TICK_SIZE
+        groups = []
+        for price, label, cat, side, prio in raw:
+            g = next((x for x in groups if abs(price - x["price"]) <= tol), None)
+            if g is None:
+                groups.append({"price": price, "labels": [label], "cat": cat, "side": side})
+            elif label not in g["labels"]:
+                g["labels"].append(label)               # major label stays first (prio-sorted)
+        return [{"price": g["price"], "label": "·".join(g["labels"]),
+                 "cat": g["cat"], "side": g["side"]} for g in groups]
+
+    def liquidity_levels(self):
+        """MAIN labeled liquidity pools as of the cursor — CAUSAL (formed only from
+        ticks at/before the cursor). The major structural/session levels traders watch:
+        PDH/PDL (+ recent dailies), PWH/PWL, overnight ONH/ONL (frozen at the 09:30
+        open), opening-range ORH/ORL (running until 10:00), and the running session
+        HOD/LOD. Minor per-swing-pivot / equal-high-low pools are intentionally NOT
+        included (too noisy). Prices are DISPLAY points; near-coincident levels merge."""
+        with self.lock:
+            cur = self.cursor
+            ro = self.rth_start_idx
+            raw = []
+
+            def add(px_real, label, cat, side, prio):
+                raw.append([round(self.disp_px(px_real), 2), label, cat, side, prio])
+
+            for p in self._static_pools():
+                add(p["px_real"], p["label"], p["cat"], p["side"], p["prio"])
+            # overnight (Globex lead-in .. 09:30) — frozen at the open once reached
+            hl = self._range_hl(self.view_start_idx, min(cur, ro))
+            if hl:
+                add(hl[0], "ONH", "overnight", "high", 3); add(hl[1], "ONL", "overnight", "low", 3)
+            if cur > ro:
+                # opening range 09:30–10:00 (running until 10:00, then frozen)
+                hl = self._range_hl(ro, min(cur, self._or_end_idx()))
+                if hl:
+                    add(hl[0], "ORH", "or", "high", 4); add(hl[1], "ORL", "or", "low", 4)
+                # running session high/low of day
+                hl = self._range_hl(ro, cur)
+                if hl:
+                    add(hl[0], "HOD", "rth", "high", 7); add(hl[1], "LOD", "rth", "low", 7)
+            return self._merge_levels(raw)
+
+    def _all_pools_for_touch(self):
+        """The MAIN pools for the full-session touch index, in integer real ticks with
+        a `formed_idx` (first tick the level is real). Fixed dailies/weekly + overnight
+        + opening-range only — the same reduced set as the chart overlay, so ◀/▶ Touch
+        steps through ~10-40 meaningful touches, not the ~1,800 swing/EQ noise. Running
+        session HOD/LOD is excluded (price is always at its own running extreme)."""
+        pools = list(self._static_pools())
+        ro = self.rth_start_idx
+        hl = self._range_hl(self.view_start_idx, ro)   # overnight frozen at the open
+        if hl:
+            pools.append({"px_real": hl[0], "label": "ONH", "cat": "overnight", "side": "high", "prio": 3, "formed_idx": ro})
+            pools.append({"px_real": hl[1], "label": "ONL", "cat": "overnight", "side": "low", "prio": 3, "formed_idx": ro})
+        oe = min(self._or_end_idx(), self.end_idx)      # opening range frozen at 10:00
+        hl = self._range_hl(ro, oe)
+        if hl and oe > ro:
+            pools.append({"px_real": hl[0], "label": "ORH", "cat": "or", "side": "high", "prio": 4, "formed_idx": oe})
+            pools.append({"px_real": hl[1], "label": "ORL", "cat": "or", "side": "low", "prio": 4, "formed_idx": oe})
+        for p in pools:
+            p.setdefault("formed_idx", self.rth_start_idx)
+        return pools
+
+    def _raw_touches(self):
+        """TF-independent chronological index of every MAIN-pool touch (cached). A touch
+        = a maximal run of ticks within LIQ_TOUCH_TK of a pool (each distinct approach is
+        one touch; a pool only generates touches at/after its formation tick, so it is
+        causal); repeat touches of the same pool within LIQ_TOUCH_COOLDOWN_NS collapse,
+        and near-coincident touches of different pools merge (keeping the major label).
+        `seek_ns` is the EXACT touch moment. RSI confluence is applied later, per TF."""
+        if self._raw_touches_cache is not None:
+            return self._raw_touches_cache
+        a0 = self.rth_start_idx
+        end = self.end_idx
+        events = []
+        for p in self._all_pools_for_touch():
+            lo = max(int(p["formed_idx"]), a0)
+            if lo >= end:
+                continue
+            seg = np.asarray(PX[lo:end], dtype=np.int64)
+            inz = np.abs(seg - p["px_real"]) <= LIQ_TOUCH_TK
+            if not inz.any():
+                continue
+            prev = np.concatenate(([False], inz[:-1]))
+            starts = np.flatnonzero(inz & ~prev)        # rising edges = run starts = touches
+            kept_ns = -(1 << 62)
+            for s in starts.tolist():
+                gi = lo + int(s)
+                ns = int(TS[gi])
+                if ns - kept_ns < LIQ_TOUCH_COOLDOWN_NS:   # collapse chop at the same level
+                    continue
+                kept_ns = ns
+                events.append({"idx": gi, "ns": ns,
+                               "t": self.synth_time(int(TS[gi])),
+                               "label": p["label"], "cat": p["cat"], "side": p["side"],
+                               "price": round(self.disp_px(p["px_real"]), 2),
+                               "prio": p["prio"]})
+        events.sort(key=lambda e: e["ns"])
+        deduped = []
+        for e in events:
+            hit = None
+            for d in reversed(deduped[-8:]):
+                if abs(e["ns"] - d["ns"]) <= 30_000_000_000 and abs(e["price"] - d["price"]) <= 0.75:
+                    hit = d; break
+            if hit is None:
+                deduped.append(e)
+            elif e["prio"] < hit["prio"]:
+                hit.update({"label": e["label"], "cat": e["cat"], "side": e["side"],
+                            "prio": e["prio"], "price": e["price"]})
+        for e in deduped:
+            e["seek_ns"] = e["ns"]        # seek to the EXACT moment of the touch
+            e.pop("prio", None)
+        self._raw_touches_cache = deduped
+        return deduped
+
+    def _tf_closes(self, tf_sec):
+        """(end_ns[], close[]) bars at tf_sec over [view_start_idx, end_idx] — the same
+        bucketing the chart uses, so server RSI matches the displayed RSI. Closes are
+        raw integer ticks (RSI is invariant to the affine display transform)."""
+        lo = self.view_start_idx
+        hi = self.end_idx
+        if hi <= lo:
+            return np.array([], dtype=np.int64), np.array([], dtype=np.float64)
+        ts = np.asarray(TS[lo:hi], dtype=np.int64)
+        px = np.asarray(PX[lo:hi], dtype=np.int64)
+        et = pd.DatetimeIndex(pd.to_datetime(ts, utc=True)).tz_convert(ET)
+        sec = (et.hour * 3600 + et.minute * 60 + et.second).to_numpy().astype(np.int64)
+        base_norm = pd.Timestamp(self.session_start_ns, tz="UTC").tz_convert(ET).normalize()
+        day_off = (et.normalize() - base_norm).days.to_numpy().astype(np.int64)
+        synth = SYNTH_BASE + sec + day_off * 86400
+        bucket = (synth // tf_sec) * tf_sec
+        df = pd.DataFrame({"bk": bucket, "px": px, "ts": ts})
+        g = df.groupby("bk", sort=True)
+        closes = g["px"].last().to_numpy().astype(np.float64)
+        end_ns = g["ts"].last().to_numpy().astype(np.int64)
+        return end_ns, closes
+
+    def _rsi_series(self, tf_sec):
+        """(end_ns[], rsi[]) full-session Wilder RSI(LIQ_RSI_PERIOD) at tf_sec, cached."""
+        cached = self._rsi_cache.get(tf_sec)
+        if cached is not None:
+            return cached
+        end_ns, closes = self._tf_closes(tf_sec)
+        rsi = _wilder_rsi(closes, LIQ_RSI_PERIOD)
+        self._rsi_cache[tf_sec] = (end_ns, rsi)
+        return end_ns, rsi
+
+    def touches(self, tf_sec):
+        """MAIN-pool touches surfaced ONLY when RSI(14) at `tf_sec` confluences with the
+        touch: RSI must reach overbought (>=LIQ_RSI_OB) or oversold (<=LIQ_RSI_OS) within
+        ±LIQ_RSI_WINDOW_NS of the touch (already there at the touch, or hits within 5 min
+        after). Each kept touch is tagged `rsi` = OB / OS / OB+OS. Cached per TF."""
+        cached = self._touches_cache.get(tf_sec)
+        if cached is not None:
+            return cached
+        raw = self._raw_touches()
+        end_ns, rsi = self._rsi_series(tf_sec)
+        win = LIQ_RSI_WINDOW_NS
+        out = []
+        if len(end_ns):
+            for e in raw:
+                t = e["ns"]
+                a = int(np.searchsorted(end_ns, t - win, side="left"))
+                b = int(np.searchsorted(end_ns, t + win, side="right"))
+                if b <= a:
+                    continue
+                seg = rsi[a:b]
+                seg = seg[~np.isnan(seg)]
+                if not seg.size:
+                    continue
+                ob = bool(seg.max() >= LIQ_RSI_OB)
+                os_ = bool(seg.min() <= LIQ_RSI_OS)
+                if ob or os_:
+                    ev = dict(e)
+                    ev["rsi"] = "OB+OS" if (ob and os_) else ("OB" if ob else "OS")
+                    out.append(ev)
+        with self.lock:
+            self._touches_cache[tf_sec] = out
+        return out
+
+    def _detect_bar_view(self, bk, cur):
+        return {"t": int(bk), "o": round(self.disp_px(cur["o"]), 2),
+                "h": round(self.disp_px(cur["h"]), 2), "l": round(self.disp_px(cur["l"]), 2),
+                "c": round(self.disp_px(cur["c"]), 2), "ns": int(cur["ns"]),
+                "idx": int(cur["idx"]), "mod": int(cur["mod"])}
+
+    def _ensure_detect_bars(self, tf_sec):
+        """Incremental detection-bar cache (RTH-anchored, with ns/idx/mod) — processes
+        only NEW ticks [built_to, cursor) per call so the live overlay is cheap. Mirrors
+        _ensure_bars; reset if the cursor rewinds."""
+        c = self._detect_cache
+        if c is None or c.get("tf") != tf_sec or c["built_to"] > self.cursor:
+            c = {"tf": tf_sec, "built_to": self.start_idx, "bars": [], "cur_bk": None, "cur": None}
+            self._detect_cache = c
+        lo = c["built_to"]; hi = self.cursor
+        if hi <= lo:
+            return c
+        ts = np.asarray(TS[lo:hi], dtype=np.int64)
+        px = np.asarray(PX[lo:hi], dtype=np.int64)
+        et = pd.DatetimeIndex(pd.to_datetime(ts, utc=True)).tz_convert(ET)
+        sec = (et.hour * 3600 + et.minute * 60 + et.second).to_numpy().astype(np.int64)
+        base_norm = pd.Timestamp(self.session_start_ns, tz="UTC").tz_convert(ET).normalize()
+        day_off = (et.normalize() - base_norm).days.to_numpy().astype(np.int64)
+        synth = SYNTH_BASE + sec + day_off * 86400
+        bucket = ((synth // tf_sec) * tf_sec).tolist()
+        px_l = px.tolist(); ts_l = ts.tolist(); mod_l = (sec // 60).tolist()
+        cur_bk = c["cur_bk"]; cur = c["cur"]
+        for k in range(len(bucket)):
+            b = bucket[k]; p = px_l[k]
+            if cur_bk is None or b != cur_bk:
+                if cur_bk is not None:
+                    c["bars"].append(self._detect_bar_view(cur_bk, cur))
+                cur_bk = b
+                cur = {"o": p, "h": p, "l": p, "c": p, "ns": ts_l[k], "idx": lo + k, "mod": mod_l[k]}
+            else:
+                if p > cur["h"]: cur["h"] = p
+                if p < cur["l"]: cur["l"] = p
+                cur["c"] = p; cur["ns"] = ts_l[k]; cur["idx"] = lo + k
+        c["cur_bk"] = cur_bk; c["cur"] = cur; c["built_to"] = hi
+        return c
+
+    def active_structures(self):
+        """Currently-relevant FVG/IFVG/BOS/MSS/sweep overlays as of the cursor —
+        CAUSAL (bars only up to the cursor); mitigated/stale structures are dropped."""
+        with self.lock:
+            tf = ict_engine.ICT_PARAMS["detection_tf_sec"]
+            c = self._ensure_detect_bars(tf)
+            bars = list(c["bars"])
+            if c["cur"] is not None:
+                bars.append(self._detect_bar_view(c["cur_bk"], c["cur"]))
+            cur_t = self.synth_time(int(TS[max(self.start_idx, self.cursor - 1)]))
+            return ict_engine.active_structures(bars, cur_t)
+
+    def _near_setup(self):
+        """True if the cursor's replay time is within ±_setup_gate_sec of a setup."""
+        cur_t = self.synth_time(self.replay_now_ns)
+        return any(abs(cur_t - su["t"]) <= self._setup_gate_sec for su in self.setups())
+
+    def goto_ns(self, target_ns):
+        """Jump the replay clock to a target tick ns (a setup's bar), resolving any
+        open position honestly through the skipped ticks, then pause. FORWARD jumps
+        resolve open positions honestly; BACKWARD jumps (setup review) rewind the
+        cursor only when FLAT and re-hide future bars (caches rebuild) — never a
+        look-ahead. A backward jump with a live position is refused."""
+        with self.lock:
+            if self.ended:
+                return
+            self.advance()
+            target_ns = int(target_ns)
+            last_ns = int(TS[self.end_idx - 1])
+            target_ns = min(target_ns, last_ns)
+            target = int(np.searchsorted(TS[self.start_idx:self.end_idx],
+                                         target_ns, side="right")) + self.start_idx
+            target = max(self.start_idx + 1, min(target, self.end_idx))
+            if target > self.cursor:
+                # FORWARD: resolve any open position honestly through the skipped ticks
+                self.replay_now_ns = target_ns
+                if self.position is None and self.pending is None:
+                    self.cursor = target
+                else:
+                    self._walk(target)
+            elif target < self.cursor:
+                # BACKWARD (setup review): rewind only when FLAT — re-hide future bars;
+                # the bar/footprint/detect/VWAP caches all auto-rebuild when cursor <
+                # built_to. A live position/pending can't be rewound, so refuse it.
+                if self.position is not None or self.pending is not None:
+                    self.paused = True
+                    self.last_wall = time.time()
+                    return
+                self.cursor = target
+                self.replay_now_ns = target_ns
+            if self.cursor >= self.end_idx:
+                self._end_session()
+                return
+            self.paused = True
+            self.last_wall = time.time()
 
     # ---- footprint building (no lookahead: ticks[start:cursor] only) ----
     def _ensure_footprint(self, tf_sec):
@@ -1085,7 +1886,7 @@ class ReplaySession:
                 "total": total, "price_hi": prices[-1], "price_lo": prices[0]}
 
     # ---- snapshot for the client ----
-    def snapshot(self, flow=False, heat=False, vwap=False):
+    def snapshot(self, flow=False, heat=False, vwap=False, tape=False):
         with self.lock:
             cur = self._cur_price()
             open_pnl = None; pos_view = None
@@ -1098,6 +1899,9 @@ class ReplaySession:
                 pos_view = {
                     "side": "LONG" if p["side"] == 1 else "SHORT", "size": p["size"],
                     "entry": round(self.disp_px(p["entry_px"]), 2),
+                    # synth time of the fill — left edge of the SL/TP trade box (the box
+                    # grows from here to the live bar and freezes at close).
+                    "entry_synth": self.synth_time(p["entry_ns"]),
                     "stop": None if p["stop"] is None else round(self.disp_px(p["stop"]), 2),
                     "target": None if p["target"] is None else round(self.disp_px(p["target"]), 2),
                     "stop_tk": p.get("stop_tk"), "target_tk": p.get("target_tk"),
@@ -1123,6 +1927,11 @@ class ReplaySession:
                 "position": pos_view, "stats": self.stats(),
                 "flow_thresh": FLOW_THRESH,
                 "open_heat_quiet": OPEN_HEAT_QUIET, "open_heat_hot": OPEN_HEAT_HOT,
+                "tape_vr_fade": TAPE_VR_FADE, "tape_vr_trend": TAPE_VR_TREND,
+                "setup_only": self.setup_only,
+                # EXACT cursor synth time (not bucketed) — lets the client match the
+                # current jump-to-setup index precisely (setup.t is a 1-min bucket).
+                "cursor_synth": self.synth_time(self.replay_now_ns),
             }
             # FLOW LIGHT readout — only when the client asks (toggle ON), so the
             # searchsorted+dot is skipped entirely when the study is OFF.
@@ -1134,6 +1943,14 @@ class ReplaySession:
             # VWAP readout — same gating: incremental, computed only when ON.
             if vwap:
                 snap["vwap"] = self._vwap(self.cursor)
+            # TAPE REGIME readout — same gating: VR computed only when ON.
+            if tape:
+                snap["tape_vr"] = self._tape_vr(self.cursor, self.replay_now_ns)
+            # DATE REVEAL — when explicitly enabled (env/CLI) OR for a REVIEW session
+            # (date-loaded, e.g. the loser navigator, where the user already knows the
+            # day). Random sessions stay blinded by default.
+            if REVEAL_DATE or self._review:
+                snap["session_date"] = self._hidden_date
             return snap
 
     def stats(self):
@@ -1210,7 +2027,8 @@ class ReplaySession:
                         t["hold_s"], t.get("stop_tk"), t.get("target_tk"),
                         t.get("trail_tk"), t.get("arm_tk"),
                         t["coinflip_ev_net"], t.get("random_time_ev_net"),
-                        t.get("instrument"), t.get("flow_delta_entry")])
+                        t.get("instrument"), t.get("flow_delta_entry"),
+                        t.get("tape_vr_entry")])
 
     def _persist_json(self):
         # Always stamp the (frozen-if-past-09:35) opening-range width into the
@@ -1219,6 +2037,7 @@ class ReplaySession:
         st["open5m_range"] = self._open5m_range(self.cursor, self.replay_now_ns)
         data = {"session_id": self.id, "mode": self.mode, "ended": self.ended,
                 "stats": st, "trades": self.trades,
+                "play_pause_events": self.play_pause_events,
                 "hidden_date_sha": secrets.token_hex(0)}  # date intentionally omitted
         with open(self._json_path, "w") as f:
             json.dump(data, f, indent=2)
@@ -1268,6 +2087,11 @@ def new_session():
     body = request.get_json(silent=True) or {}
     mode = body.get("mode", "rth")
     slip = body.get("slip_tk", DEFAULT_SLIP_TK)
+    # REVIEW MODE: an explicit `date` loads that specific market day (loser navigator).
+    # Validate it is in the cache; otherwise the loser-nav has nothing to show.
+    date = body.get("date")
+    if date is not None and date not in _SESS_BY_DATE:
+        return jsonify({"ok": False, "err": f"date {date} not in tick cache"})
     with STATE_LOCK:
         prev = STATE["session"]
         if prev is not None:
@@ -1276,7 +2100,7 @@ def new_session():
                 prev._maybe_post_discord()
             except Exception:
                 pass
-        s = ReplaySession(mode=mode, slip_tk=slip)
+        s = ReplaySession(mode=mode, slip_tk=slip, date=date)
         # Instrument continuity: an explicit body param wins; otherwise carry the
         # PREVIOUS session's choice forward. Guarantees a new session never silently
         # resets micro->mini, so what the UI shows is always what the engine bills.
@@ -1304,6 +2128,11 @@ def _want_vwap():
     return request.args.get("vwap") in ("1", "true", "True")
 
 
+def _want_tape():
+    """True when the client has the Tape Regime study ON (gates the VR calc)."""
+    return request.args.get("tape") in ("1", "true", "True")
+
+
 @app.route("/api/state")
 def state():
     s = _sess()
@@ -1311,7 +2140,7 @@ def state():
         return jsonify({"ok": False, "err": "no session"})
     s.advance()
     return jsonify({"ok": True, **s.snapshot(flow=_want_flow(), heat=_want_heat(),
-                                             vwap=_want_vwap())})
+                                             vwap=_want_vwap(), tape=_want_tape())})
 
 
 @app.route("/api/bars")
@@ -1326,7 +2155,8 @@ def bars():
     since_v = None if since in (None, "", "null") else int(float(since))
     bars_ = s.build_bars(tf_sec, since_synth=since_v)
     return jsonify({"ok": True, "tf": tf, "bars": bars_,
-                    **s.snapshot(flow=_want_flow(), heat=_want_heat(), vwap=_want_vwap())})
+                    **s.snapshot(flow=_want_flow(), heat=_want_heat(), vwap=_want_vwap(),
+                                 tape=_want_tape())})
 
 
 @app.route("/api/footprint")
@@ -1367,6 +2197,106 @@ def volprofile():
     return jsonify({"ok": True, "tf": tf, **vp})
 
 
+@app.route("/api/setups")
+def setups():
+    """Full-session TJR setup table for jump-to-setup navigation (synth time + the
+    real ns to jump to + the FVG entry zone + direction)."""
+    s = _sess()
+    if s is None:
+        return jsonify({"ok": False, "err": "no session"})
+    return jsonify({"ok": True, "setups": s.setups(),
+                    "detection_tf": ict_engine.ICT_PARAMS["detection_tf_sec"]})
+
+
+@app.route("/api/structures")
+def structures():
+    """Currently-active ICT structures (FVG/IFVG/BOS/MSS/sweep) as of the cursor —
+    causal, mitigated/stale ones dropped. Gated client-side by the overlay toggle."""
+    s = _sess()
+    if s is None:
+        return jsonify({"ok": False, "err": "no session"})
+    s.advance()
+    return jsonify({"ok": True, "structures": s.active_structures()})
+
+
+@app.route("/api/levels")
+def levels():
+    """All causal liquidity-pool levels as of the cursor (PDH/PDL/ONH/ONL/ORH/ORL/
+    PWH/PWL/HOD/LOD/swing/EQ), labeled. Gated client-side by the Liquidity overlay."""
+    s = _sess()
+    if s is None:
+        return jsonify({"ok": False, "err": "no session"})
+    s.advance()
+    return jsonify({"ok": True, "levels": s.liquidity_levels()})
+
+
+@app.route("/api/zigzag")
+def zigzag_api():
+    """MT4-style ZigZag++ pivots as of the cursor (causal, display prices), with HH/HL/
+    LH/LL labels. Depth/Deviation(ticks)/Backstep + tf are client-passed. Gated client-
+    side by the ZigZag++ overlay toggle."""
+    s = _sess()
+    if s is None:
+        return jsonify({"ok": False, "err": "no session"})
+    s.advance()
+    tf = request.args.get("tf", "5s")
+
+    def _iarg(name, default):
+        try:
+            return max(1, int(float(request.args.get(name, default))))
+        except (TypeError, ValueError):
+            return default
+
+    depth = _iarg("depth", ZZ_DEPTH)
+    dev = _iarg("dev", ZZ_DEVIATION_TK)
+    back = _iarg("back", ZZ_BACKSTEP)
+    return jsonify({"ok": True, "tf": tf, "pivots": s.zigzag(_tf_sec(tf), depth, dev, back),
+                    "depth": depth, "dev": dev, "back": back})
+
+
+@app.route("/api/play_pause")
+def play_pause_api():
+    """The session's play/pause catcher events (toggles + instant microstructure), for
+    the on-chart pause markers and later analysis. Causal/blinded; persisted in the
+    session JSON too."""
+    s = _sess()
+    if s is None:
+        return jsonify({"ok": False, "err": "no session"})
+    return jsonify({"ok": True, "events": s.play_pause_events})
+
+
+# ── TEMPORARY: RSI(15)+Bollinger open-fade LOSER REVIEW navigator ──────────────
+# Serves rsibb_losers.json (a static list of losing trades) so the client loser-nav
+# can step through each loser's market day. Remove this route + rsibb_losers.json +
+# the client "RSI+BB Losers" study when the review is done.
+RSIBB_LOSERS_FILE = HERE / "rsibb_losers.json"
+
+
+@app.route("/api/rsibb_losers")
+def rsibb_losers_api():
+    """Temporary: the list of RSI+BB losing trades for the loser-review navigator.
+    Each: {date, entry_ns, entry_et, min_after_930, side, pnl}."""
+    try:
+        losers = json.loads(RSIBB_LOSERS_FILE.read_text(encoding="utf-8"))
+    except Exception as e:   # noqa: BLE001 — feature is inert if the file is missing
+        return jsonify({"ok": False, "err": f"rsibb_losers.json unreadable: {e!r}", "losers": []})
+    return jsonify({"ok": True, "losers": losers})
+
+
+@app.route("/api/touches")
+def touches_api():
+    """RSI-confluence liquidity-touch index for the navigator (filtered to touches where
+    RSI(14) on the requested TF hits >=70 or <=30 within ±5 min). Each touch's `seek_ns`
+    is the EXACT touch moment. The RSI filter is TF-dependent, so the client passes tf."""
+    s = _sess()
+    if s is None:
+        return jsonify({"ok": False, "err": "no session"})
+    tf = request.args.get("tf", "5s")
+    return jsonify({"ok": True, "touches": s.touches(_tf_sec(tf)), "tf": tf,
+                    "rsi_ob": LIQ_RSI_OB, "rsi_os": LIQ_RSI_OS,
+                    "rsi_window_sec": LIQ_RSI_WINDOW_NS // 1_000_000_000})
+
+
 @app.route("/api/control", methods=["POST"])
 def control():
     s = _sess()
@@ -1384,6 +2314,10 @@ def control():
         s.jump(float(b.get("seconds", 300)))
     elif act == "to_close":
         s.jump_to_close()
+    elif act == "goto":
+        s.goto_ns(b.get("ns", 0))                 # jump-to-setup (ns of the setup bar)
+    elif act == "setup_only":
+        s.setup_only = bool(b.get("on"))          # only allow entry near a TJR setup
     elif act == "instrument":
         s.set_instrument(b.get("instrument", "mini"))
     return jsonify({"ok": True, **s.snapshot()})
@@ -1440,8 +2374,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=5056)
     ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--reveal-date", action="store_true",
+                    help="expose the session's real calendar date (news trading; default OFF)")
     args = ap.parse_args()
-    print(f"[replay_trader] http://{args.host}:{args.port}")
+    global REVEAL_DATE
+    if args.reveal_date:
+        REVEAL_DATE = True
+    print(f"[replay_trader] http://{args.host}:{args.port}  reveal_date={REVEAL_DATE}")
     app.run(host=args.host, port=args.port, threaded=True, debug=False)
 
 

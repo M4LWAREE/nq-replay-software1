@@ -1,0 +1,7 @@
+# Keep mac/unix launch scripts LF so they run on macOS regardless of the host that committed them.
+*.command text eol=lf
+*.sh text eol=lf
+Contents/MacOS/launcher text eol=lf
+run_mac.command text eol=lf
+# Windows launcher stays CRLF
+*.bat text eol=crlf

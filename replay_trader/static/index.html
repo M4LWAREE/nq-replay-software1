@@ -22,6 +22,7 @@
       <button class="spd ctl" data-spd="20">20×</button>
       <button id="btnJump" class="ctl">Jump +5m</button>
       <button id="btnClose" class="ctl" title="Jump to :59 of the current 1-min bar, then pause (key 9)">→ :59</button>
+      <button id="btnFocus" class="ctl" title="Snap the chart to focus on the candles at a readable zoom">◎ Focus</button>
     </div>
     <div class="grp">
       <span class="lbl">TF</span>
@@ -40,12 +41,57 @@
           </div>
           <button id="btnBA" class="ctl menuitem" title="Bid/Ask volume per candle (bid left, ask right)">Bid / Ask</button>
           <button id="btnVWAP" class="ctl menuitem" title="VWAP: session volume-weighted average price from the 09:30 RTH open, drawn live. When off, the server skips the calc.">VWAP</button>
+          <div class="menurow">
+            <button id="btnBB" class="ctl menuitem" title="Bollinger Bands: SMA basis ± (st-dev × mult) bands on the price chart, computed on the displayed-TF bars. Adjustable length & multiplier via the gear.">Bollinger Bands</button>
+            <button id="btnBBcfg" class="ctl gear" title="Bollinger Bands settings (length / st-dev multiplier)">⚙</button>
+          </div>
+          <div class="menurow">
+            <button id="btnRsi" class="ctl menuitem" title="RSI: Wilder's relative-strength index in a sub-pane below price, with 30/70 guides. Adjustable length via the gear. Computed on the displayed bars at the current TF.">RSI</button>
+            <button id="btnRsicfg" class="ctl gear" title="RSI settings (length)">⚙</button>
+          </div>
+          <button id="btnLiq" class="ctl menuitem" title="Liquidity pools: labeled horizontal levels for every resting-liquidity pool — PDH/PDL, recent dailies, ONH/ONL, ORH/ORL, PWH/PWL, session HOD/LOD, swing highs/lows, equal highs/lows (EQH/EQL). Causal, no look-ahead.">Liquidity Pools</button>
+          <button id="btnTouchNav" class="ctl menuitem" title="Show the liquidity-touch skip buttons (◀ Touch / Touch ▶) in the toolbar — jump to RSI-confluence liquidity-pool touches.">Liquidity skip ◀▶</button>
+          <div class="menurow">
+            <button id="btnZZ" class="ctl menuitem" title="ZigZag++ (MT4-style, Dev Lucem): alternating swing highs/lows connected by lime/red legs and labeled HH/HL/LH/LL. Computed on the displayed-TF bars; causal (last leg repaints as price extends).">ZigZag++</button>
+            <button id="btnZZcfg" class="ctl gear" title="ZigZag++ settings (Depth / Deviation / Backstep)">⚙</button>
+          </div>
+          <button id="btnPP" class="ctl menuitem" title="Pause marks: a marker on the chart at every PAUSE you took (gray dot), with the pause-before-entry ones highlighted (orange arrow). Every play/pause is logged with instant microstructure to the session JSON for later analysis.">Pause marks</button>
           <button id="btnFlow" class="ctl menuitem" title="Flow Light: trailing-60s order-flow permission pill in the toolbar (default on). When off, the server skips the calc.">Flow Light</button>
           <button id="btnHeat" class="ctl menuitem" title="Open Heat: 5-min opening-range width (09:30–09:35) pill in the toolbar (default on). Green &lt;250tk quiet, amber 250–400, red &gt;400 heat protocol. When off, the server skips the calc.">Open Heat</button>
+          <button id="btnTape" class="ctl menuitem" title="Tape Regime: rolling 30-min variance ratio. Green &lt;0.9 fade-able (mean-reverting — your habitat), grey 0.9–1.1 neutral, red &gt;1.1 extending (don't fade). Default on; when off the server skips the calc.">Tape Regime</button>
+          <div class="menusep">ICT / TJR</div>
+          <button id="btnIct" class="ctl menuitem" title="ICT overlays: live FVG/IFVG/BOS/MSS/liquidity-sweep markers — only currently-active ones (filled FVGs disappear). Causal, no look-ahead.">ICT Overlays</button>
+          <button id="btnAnatomy" class="ctl menuitem" title="Setup Anatomy: highlights the nearest TJR setup's mechanical parts — swing points, swept liquidity, MSS/BOS break, FVG entry zone, entry/stop/target — labeled and revealed causally as price reaches each part.">Setup Anatomy</button>
+          <button id="btnSltp" class="ctl menuitem" title="Draggable SL/TP lines (TradingView-style) with live Risk:Reward + an entry-anchored trade box; sets your trade bracket. Hotkey: F.">Draggable SL/TP</button>
+          <button id="btnSetupOnly" class="ctl menuitem" title="Only allow order entry near a detected TJR setup — skips the dead time so you trade the ~2 setups.">Setup-only entry</button>
+          <button id="btnSetupNav" class="ctl menuitem" title="Show the TJR setup skip buttons (◀ Setup / Setup ▶) in the toolbar — jump between detected TJR setups.">Setup skip ◀▶</button>
+          <div class="menusep">TEMP · REVIEW</div>
+          <button id="btnLoser" class="ctl menuitem" title="TEMPORARY: RSI(15)+Bollinger open-fade LOSER REVIEW. Shows a toolbar navigator to step through the 80 losing trades — each Prev/Next loads that loser's market day (real prices) and seeks to ~2.5 min before the entry so you can watch the setup form.">RSI+BB Losers</button>
         </div>
       </div>
+      <span id="setupnav" class="navgrp hidden">
+        <span class="seps"></span>
+        <button id="btnSetupPrev" class="ctl" title="Jump to the previous TJR setup">◀ Setup</button>
+        <button id="btnSetupNext" class="ctl" title="Jump to the next TJR setup (skips dead time)">Setup ▶</button>
+        <span id="setupcount" class="lbl" title="detected TJR setups in this session">–/–</span>
+      </span>
+      <span id="touchnav" class="navgrp hidden">
+        <span class="seps"></span>
+        <button id="btnTouchPrev" class="ctl" title="Jump to the previous liquidity-pool touch with RSI confluence">◀ Touch</button>
+        <button id="btnTouchNext" class="ctl" title="Jump to the exact moment of the next main-pool touch where RSI(14) hits 70/30 within ±5 min (overbought/oversold confluence)">Touch ▶</button>
+        <span id="touchcount" class="lbl" title="main liquidity-pool touches with RSI 70/30 confluence (current timeframe)">–/–</span>
+      </span>
+      <!-- TEMPORARY: RSI+BB loser review navigator -->
+      <span id="losernav" class="navgrp hidden">
+        <span class="seps"></span>
+        <span id="losercount" class="lbl" title="RSI+BB losing trades to review">Loser –/80</span>
+        <button id="btnLoserPrev" class="ctl" title="Load the previous loser's day, seek to before its entry">◀ Prev Loser</button>
+        <button id="btnLoserNext" class="ctl" title="Load the next loser's day, seek to before its entry">Next Loser ▶</button>
+        <span id="loserinfo" class="lbl loserinfo" title="current loser: date · entry time · side · pnl">—</span>
+      </span>
     </div>
     <div class="grp readout">
+      <span id="session-date" class="datebadge hidden"></span>
       <span class="lbl">ET</span><span id="clock" class="val">--:--:--</span>
       <span class="lbl">Px</span><span id="price" class="val">--</span>
       <span class="lbl">Done</span><span id="prog" class="val">0%</span>
@@ -58,6 +104,10 @@
             title="5-min opening-range width (09:30–09:35, max−min ticks). Live until 09:35 then frozen. Green &lt;250 quiet — your tape; amber 250–400; red &gt;400 heat protocol: half size, double warmup, wider trail, first stop ends session.">
         <span id="heatlabel">OPEN</span><span id="heatval" class="val">—</span>
       </span>
+      <span id="tapepill" class="tapepill neutral"
+            title="Tape regime — rolling 30-min variance ratio VR = var(5-min) / (5×var(1-min)). &lt;0.9 mean-reverting (FADE-ABLE, your habitat); 0.9–1.1 neutral; &gt;1.1 trending (EXTENDING — stand down, don't fade). A read for your discretion, never blocks a trade.">
+        <span id="tapelabel">TAPE</span><span id="tapeval" class="val">—</span>
+      </span>
     </div>
     <div class="grp right">
       <button id="btnNew" class="ctl alt">New Session</button>
@@ -66,12 +116,18 @@
   </header>
 
   <div id="main">
-    <!-- chart -->
+    <!-- chart column: price chart (with overlays) + RSI sub-pane -->
+    <div id="chartcol">
     <section id="chartwrap">
       <div id="chart"></div>
       <canvas id="fpcanvas" class="hidden"></canvas>
       <canvas id="vpcanvas" class="hidden"></canvas>
       <canvas id="bacanvas" class="hidden"></canvas>
+      <canvas id="ictcanvas" class="hidden"></canvas>
+      <canvas id="liqcanvas" class="hidden"></canvas>
+      <canvas id="zzcanvas" class="hidden"></canvas>
+      <canvas id="anatomycanvas" class="hidden"></canvas>
+      <canvas id="sltpcanvas" class="hidden"></canvas>
       <div id="vpcfg" class="vpcfg hidden">
         <div class="vpcfg-h">Volume Profile</div>
         <label>Range
@@ -91,8 +147,29 @@
         <label class="vpck"><input id="vpSplit" type="checkbox" checked/> Buy / sell split</label>
         <label class="vpck"><input id="vpShowPoc" type="checkbox" checked/> POC line</label>
       </div>
+      <div id="zzcfg" class="vpcfg hidden">
+        <div class="vpcfg-h">ZigZag++</div>
+        <label>Depth <input id="zzDepth" type="number" min="1" max="100" step="1" value="12"/></label>
+        <label>Deviation (tk) <input id="zzDev" type="number" min="1" max="200" step="1" value="5"/></label>
+        <label>Backstep <input id="zzBack" type="number" min="1" max="50" step="1" value="2"/></label>
+        <label class="vpck"><input id="zzLabels" type="checkbox" checked/> HH/HL/LH/LL labels</label>
+      </div>
+      <div id="bbcfg" class="vpcfg hidden">
+        <div class="vpcfg-h">Bollinger Bands</div>
+        <label>Length <input id="bbLen" type="number" min="2" max="200" step="1" value="20"/></label>
+        <label>StdDev × <input id="bbMult" type="number" min="0.5" max="5" step="0.1" value="2"/></label>
+      </div>
+      <div id="rsicfg" class="vpcfg hidden">
+        <div class="vpcfg-h">RSI</div>
+        <label>Length <input id="rsiLen" type="number" min="2" max="100" step="1" value="14"/></label>
+      </div>
       <div id="paused-badge" class="badge">PAUSED — press Space / Play</div>
     </section>
+    <section id="rsiwrap" class="hidden">
+      <div id="rsipane"></div>
+      <span id="rsipanelabel" class="panelabel">RSI(14)</span>
+    </section>
+    </div>
 
     <!-- side panel -->
     <aside id="side">
@@ -125,7 +202,7 @@
           <button id="btnSell" class="big sell">SELL (S)</button>
         </div>
         <div class="row">
-          <button id="btnFlat" class="big flat">FLATTEN (F)</button>
+          <button id="btnFlat" class="big flat">FLATTEN (C)</button>
         </div>
         <div class="hint">Stop/Target/Trail are TICK offsets from your fill. <b>Trail</b> = ratchet distance (peak − N tk); <b>Arm at +X</b> = trail only starts after +X tk profit (0 = from entry). Blank/0 Trail = off. Editable while in a position — type new ticks &amp; hit Apply (recomputed from the original fill; trail never loosens).</div>
         <div class="row"><button id="btnApply" class="ctl">Apply stop/target/trail</button></div>
@@ -163,7 +240,8 @@
   <div id="help">
     <b>How to use:</b> Press <b>Play</b> (or Space) to start the tape. Bars build tick-by-tick in real time.
     <b>BUY</b>/<b>SELL</b> (keys B/S) open a market order at the next print +slip; set Stop/Target first or
-    edit them live then <b>Apply</b>. <b>FLATTEN</b> (F) closes now. The date is hidden and prices are
+    edit them live then <b>Apply</b>. <b>FLATTEN</b> (C) closes now. <b>F</b> toggles the draggable SL/TP
+    (lines + entry-anchored trade box). The date is hidden and prices are
     offset — you're reading the tape blind. Your net is scored against a <b>coin-flip</b> taking the same
     trades in a random direction: <b>edge/trade</b> is your real edge. End &amp; Reveal shows the date.
   </div>

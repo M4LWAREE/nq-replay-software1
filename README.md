@@ -17,6 +17,21 @@ fills (next-print + 1 tick slip, gap-through stops, $4.20 round-turn commission)
    flask/numpy/pandas, and builds the session index (~1 min). Browser opens at
    http://127.0.0.1:5056.
 
+### macOS (one-file setup)
+
+1. Install Python 3.10+ (`brew install python`, or python.org).
+2. Clone this repo:
+   `git clone https://github.com/M4LWAREE/nq-replay-software1.git`
+3. Double-click **`NQ Replay Trader.app`** (or `run_mac.command`). The first run
+   auto-creates the venv, **downloads the ~730 MB tick data** from the repo's
+   `data-v1` Release, builds the session index, then launches and opens
+   http://127.0.0.1:5056. Every later run just launches instantly.
+   - First launch only: if macOS says the app is from an unidentified developer,
+     right-click the app → **Open** → **Open** (one time), or run
+     `xattr -dr com.apple.quarantine "NQ Replay Trader.app"`.
+   - No data Release yet? Drop the 5 `nq_ticks_*` files into `tick_engine/cache/`
+     manually and it skips the download.
+
 ## How to use
 
 - **New Session** picks a random RTH day you can't identify. Price shown with a

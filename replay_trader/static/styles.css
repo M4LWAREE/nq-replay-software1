@@ -18,6 +18,12 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
 .lbl{color:var(--muted);font-size:11px;text-transform:uppercase}
 .val{font-variant-numeric:tabular-nums;font-weight:600;min-width:62px;display:inline-block}
 .seps{width:1px;height:18px;background:var(--line);margin:0 2px}
+/* date-reveal badge (news trading; only shown when the server reveals the date) */
+.datebadge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;
+  border-radius:6px;border:1px solid var(--yellow);background:rgba(227,209,75,.14);
+  color:var(--yellow);font-weight:700;font-size:13px;letter-spacing:.5px;
+  font-variant-numeric:tabular-nums}
+.datebadge.hidden{display:none}
 
 .ctl{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
   border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:600}
@@ -28,8 +34,22 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
 
 /* main split */
 #main{display:flex;flex:1;min-height:0}
-#chartwrap{position:relative;flex:1;min-width:0;background:var(--bg)}
+#chartcol{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
+#chartwrap{position:relative;flex:1;min-width:0;min-height:0;background:var(--bg)}
 #chart{position:absolute;inset:0}
+/* RSI sub-pane (separate lightweight-charts instance, x-axis synced to price) */
+#rsiwrap{position:relative;flex:0 0 150px;height:150px;background:var(--bg);
+  border-top:1px solid var(--line)}
+#rsiwrap.hidden{display:none}
+#rsipane{position:absolute;inset:0}
+#rsiwrap .panelabel{position:absolute;top:3px;left:8px;z-index:2;pointer-events:none;
+  color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase}
+/* liquidity-pool labeled levels overlay */
+#liqcanvas{position:absolute;inset:0;z-index:3;pointer-events:none}
+#liqcanvas.hidden{display:none}
+/* ZigZag++ overlay (lines + HH/HL/LH/LL labels) */
+#zzcanvas{position:absolute;inset:0;z-index:4;pointer-events:none}
+#zzcanvas.hidden{display:none}
 #fpcanvas{position:absolute;inset:0;z-index:4;pointer-events:none}
 #fpcanvas.hidden{display:none}
 .badge{position:absolute;top:10px;left:50%;transform:translateX(-50%);
@@ -123,6 +143,27 @@ table#stats td:last-child{text-align:right;font-weight:600}
 #bacanvas{position:absolute;inset:0;z-index:4;pointer-events:none}
 #bacanvas.hidden{display:none}
 
+/* ── ICT structure overlay (read-only) + draggable SL/TP (interactive) ─────── */
+#ictcanvas{position:absolute;inset:0;z-index:5;pointer-events:none}
+#ictcanvas.hidden{display:none}
+#anatomycanvas{position:absolute;inset:0;z-index:5;pointer-events:none}
+#anatomycanvas.hidden{display:none}
+/* sltp canvas stays pointer-events:none so chart pan/zoom keep working; dragging
+   is handled by a chartwrap mousedown listener that grabs only near a handle. */
+#sltpcanvas{position:absolute;inset:0;z-index:6;pointer-events:none}
+#sltpcanvas.hidden{display:none}
+#chartwrap.sltp-grab{cursor:ns-resize}
+.menusep{color:var(--accent);font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.6px;margin:4px 2px 0;border-top:1px solid var(--line);padding-top:6px}
+#setupcount{font-variant-numeric:tabular-nums;min-width:auto;padding:0 4px}
+/* study-gated toolbar nav groups (setup / liquidity skip) — hidden until enabled */
+.navgrp{display:inline-flex;align-items:center;gap:6px}
+.navgrp.hidden{display:none}
+/* TEMPORARY: RSI+BB loser-review navigator */
+#losernav #losercount{color:var(--orange);font-weight:700}
+#losernav .loserinfo{font-variant-numeric:tabular-nums;min-width:auto;padding:0 4px;color:var(--fg)}
+#losernav .loserinfo .pos{color:var(--green)} #losernav .loserinfo .neg{color:var(--red)}
+
 /* ── studies waffle menu ─────────────────────────────────────────────────── */
 .studies-wrap{position:relative;display:inline-flex}
 .studies-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:8;
@@ -165,3 +206,15 @@ table#stats td:last-child{text-align:right;font-weight:600}
 .heatpill.warm{border-color:var(--orange);color:var(--orange);background:rgba(255,159,64,.12)}
 .heatpill.hot{border-color:var(--red);color:var(--red);background:rgba(239,83,80,.14)}
 .heatpill.off{display:none}   /* toggle OFF -> pill gone entirely, no layout gap */
+
+/* ── tape regime pill (rolling 30-min variance ratio) ──────────────────────── */
+.tapepill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
+  border-radius:20px;border:1px solid var(--line);background:var(--panel2);
+  font-size:11px;font-weight:700;letter-spacing:.3px;
+  transition:border-color .12s,background .12s,color .12s}
+.tapepill #tapelabel{font-size:10px;text-transform:uppercase;opacity:.9}
+.tapepill #tapeval{min-width:auto;font-size:12px;font-variant-numeric:tabular-nums}
+.tapepill.neutral{border-color:var(--line);color:var(--muted)}
+.tapepill.fade{border-color:var(--green);color:var(--green);background:rgba(38,166,154,.12)}
+.tapepill.extend{border-color:var(--red);color:var(--red);background:rgba(239,83,80,.14)}
+.tapepill.off{display:none}   /* toggle OFF -> pill gone entirely, no layout gap */
