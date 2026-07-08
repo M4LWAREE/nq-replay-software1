@@ -3,8 +3,11 @@ __pycache__/
 *.pyc
 .venv/
 
-# Large market data (distribute via Releases, not git)
+# Large market data — the raw cache is rebuilt on first run from the split
+# parts committed under data/ (see restore_data.py). Keep the raw cache and the
+# temporary reassembled zip out of git; the parts themselves ARE committed.
 tick_engine/cache/*.npy
+data/_nq_replay_data_reassembled.zip
 *.pkl
 *.dbn
 

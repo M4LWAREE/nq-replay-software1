@@ -5,7 +5,6 @@
 cd "$(dirname "$0")" || exit 1
 PORT=5056
 CACHE="tick_engine/cache"
-DATA_URL="https://github.com/M4LWAREE/nq-replay-software1/releases/download/data-v1/nq_replay_data.zip"
 
 echo "======================================"
 echo "   NQ Replay Trader (macOS)"
@@ -25,24 +24,10 @@ if [ ! -x ".venv/bin/python" ]; then
   ./.venv/bin/python -m pip install -q -r requirements.txt || { echo "pip install failed"; read -r -p "Press Return..." _; exit 1; }
 fi
 
-# 3) tick data (one-time ~730MB from the GitHub Release)
+# 3) tick data (one-time — rebuilt from the split parts committed under data/)
 if [ ! -f "$CACHE/nq_ticks_ts.npy" ]; then
-  echo "[setup] tick data not found — downloading ~730MB one-time (this can take a while)..."
-  mkdir -p "$CACHE"
-  if ! curl -L --fail -o "$CACHE/nq_replay_data.zip" "$DATA_URL"; then
-    echo ""
-    echo "  Download failed. The GitHub Release 'data-v1' with asset 'nq_replay_data.zip'"
-    echo "  may not be published yet. Publish it, or drop the 5 files into $CACHE manually:"
-    echo "    nq_ticks_ts.npy  nq_ticks_px.npy  nq_ticks_sz.npy  nq_ticks_side.npy  nq_ticks_meta.json"
-    read -r -p "Press Return to close..." _; exit 1
-  fi
-  echo "[setup] unzipping..."
-  unzip -o "$CACHE/nq_replay_data.zip" -d "$CACHE" >/dev/null
-  # handle a possible nested folder inside the zip
-  if [ ! -f "$CACHE/nq_ticks_ts.npy" ] && [ -f "$CACHE/tick_engine/cache/nq_ticks_ts.npy" ]; then
-    mv "$CACHE"/tick_engine/cache/* "$CACHE"/ 2>/dev/null || true
-  fi
-  rm -f "$CACHE/nq_replay_data.zip"
+  echo "[setup] rebuilding tick data from bundled parts (one-time)..."
+  python3 restore_data.py || { echo "data restore failed"; read -r -p "Press Return to close..." _; exit 1; }
 fi
 
 # 4) session index (one-time)

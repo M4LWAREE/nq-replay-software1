@@ -8,14 +8,14 @@ fills (next-print + 1 tick slip, gap-through stops, $4.20 round-turn commission)
 ## Setup
 
 1. Install Python 3.10+ (check "Add to PATH" on Windows).
-2. Make sure `tick_engine/cache/` contains the 5 data files
-   (`nq_ticks_ts.npy`, `nq_ticks_px.npy`, `nq_ticks_sz.npy`,
-   `nq_ticks_side.npy`, `nq_ticks_meta.json`) - ~730 MB total. If you got this
-   from GitHub, download the data zip from the repo's Releases page and unzip
-   it into `tick_engine/cache/`.
-3. Double-click `run_replay_trader.bat`. First run creates a venv, installs
-   flask/numpy/pandas, and builds the session index (~1 min). Browser opens at
-   http://127.0.0.1:5056. Every later run launches instantly.
+2. **The tick data is bundled in the repo** — split into <50MB parts under
+   `data/` (GitHub blocks single files over 100MB). You do **not** download it
+   separately: on first run the launcher runs `restore_data.py`, which
+   reassembles the parts and unpacks the 5 `nq_ticks_*` files into
+   `tick_engine/cache/` automatically (~244MB to fetch when you clone/ZIP).
+3. Double-click `run_replay_trader.bat`. First run reassembles the data, creates
+   a venv, installs flask/numpy/pandas, and builds the session index (~1-2 min).
+   Browser opens at http://127.0.0.1:5056. Every later run launches instantly.
 
 ### Windows (one-click shortcut)
 
@@ -29,14 +29,13 @@ icon boots the server and pops open http://127.0.0.1:5056 automatically.
 2. Clone this repo:
    `git clone https://github.com/M4LWAREE/nq-replay-software1.git`
 3. Double-click **`NQ Replay Trader.app`** (or `run_mac.command`). The first run
-   auto-creates the venv, **downloads the ~730 MB tick data** from the repo's
-   `data-v1` Release, builds the session index, then launches and opens
-   http://127.0.0.1:5056. Every later run just launches instantly.
+   auto-creates the venv, **rebuilds the tick data from the bundled parts** (via
+   `restore_data.py` — no separate download), builds the session index, then
+   launches and opens http://127.0.0.1:5056. Every later run just launches
+   instantly.
    - First launch only: if macOS says the app is from an unidentified developer,
      right-click the app → **Open** → **Open** (one time), or run
      `xattr -dr com.apple.quarantine "NQ Replay Trader.app"`.
-   - No data Release yet? Drop the 5 `nq_ticks_*` files into `tick_engine/cache/`
-     manually and it skips the download.
 
 ## How to use
 
@@ -68,7 +67,11 @@ icon boots the server and pops open http://127.0.0.1:5056 automatically.
 
 ## Data note
 
-The tick data files are too large for a normal git push (GitHub blocks files
-over 100 MB). Publish the code repo without `tick_engine/cache/*.npy` (the
-.gitignore already excludes them) and attach `nq-replay-data.zip` as a GitHub
-Release asset, or share it via a file link.
+The raw tick files (~727MB uncompressed) are too large for git as single files
+(GitHub blocks anything over 100MB), so the data is committed as a compressed
+zip split into <50MB parts under `data/` (`nq_replay_data.zip.000` ...). Both
+`git clone` and GitHub's "Download ZIP" pull the parts, and `restore_data.py`
+reassembles + unpacks them into `tick_engine/cache/` on first launch. The raw
+`tick_engine/cache/*.npy` files stay git-ignored (they're regenerated locally).
+To refresh the data, re-run `_split_data.py` on a new `nq_replay_data.zip` and
+commit the new parts.
