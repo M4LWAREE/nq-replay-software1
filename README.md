@@ -15,7 +15,13 @@ fills (next-print + 1 tick slip, gap-through stops, $4.20 round-turn commission)
    it into `tick_engine/cache/`.
 3. Double-click `run_replay_trader.bat`. First run creates a venv, installs
    flask/numpy/pandas, and builds the session index (~1 min). Browser opens at
-   http://127.0.0.1:5056.
+   http://127.0.0.1:5056. Every later run launches instantly.
+
+### Windows (one-click shortcut)
+
+Run **`Create Desktop Shortcut.bat`** once — it drops an **"NQ Replay Trader"**
+icon on your Desktop pointing at the launcher. From then on, one click on that
+icon boots the server and pops open http://127.0.0.1:5056 automatically.
 
 ### macOS (one-file setup)
 
